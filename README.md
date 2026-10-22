@@ -13,10 +13,11 @@ _Description from [Wikipedia](https://en.wikipedia.org/wiki/Kirby_Super_Star), C
 
 ## Status
 
-Scaffolded on 2026-10-21 — **not yet a working port.** The layout, build,
-regeneration pipeline, CI, and packaging are wired up; the game does not run
-until the host work in `src/game_rtl.c` is done. See
-[Porting from here](#porting-from-here).
+The local build now renders correctly across the tested graphics modes. GitHub
+releases are **setup packs**, not prebuilt game binaries: each pack contains the
+setup host, recompiler and source tree, and the player generates the playable
+game locally from their own verified ROM. ROM images and ROM-derived generated
+C are never included in releases.
 
 ## ROM identity
 
@@ -102,6 +103,20 @@ The scaffold stops where the game-specific work starts. In rough order:
    diverges, and they are cheap to fix early.
 4. **Never synthesise a result** to get past uncovered code, and never edit
    `src/gen/` by hand. Fix the config or the framework and regenerate.
+
+## Nightly updates
+
+Official Windows and macOS setup packs include **Check for Updates** in the
+launcher. It checks the `NVDEMU/KirbySuperStarPC` `Nightly` release, verifies
+the downloaded ZIP against its published SHA-256 checksum, and waits for the
+running game to close before installation. Your ROM selection, settings, mod
+state, saves, and locally generated ROM-derived files are preserved.
+
+Because each release is a setup pack, the updater reopens the setup host after
+installing. Choose **Generate & rebuild** to rebuild the playable executable
+from your own ROM and the updated source. Linux users can download the latest
+`linux-x64` setup ZIP from the Nightly GitHub Release and unpack it over their
+existing setup-pack folder; Linux in-app updating is not enabled.
 
 ## Multiplayer
 
