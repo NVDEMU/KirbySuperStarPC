@@ -56,7 +56,7 @@ diff --git a/runner/src/snes/ppu.c b/runner/src/snes/ppu.c
    ppu->scrollPrev = f->scrollPrev;
    ppu->scrollPrev2 = f->scrollPrev2;
    ppu->m7prev = f->m7prev;
-@@ -3367,12 +3383,16 @@
+@@ -3367,12 +3383,17 @@
    if (!s_raster_armed || !s_raster_rendering) return;
    s_raster_rendering = 0;
    if (s_raster_have_completed) {
