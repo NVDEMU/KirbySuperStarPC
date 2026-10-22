@@ -55,11 +55,40 @@ ROM_FILE="$(python3 "$IDENTITY_TOOL" rom_identity.txt --get rom_file)"
 ROM_SHA256="$(python3 "$IDENTITY_TOOL" rom_identity.txt --get expected_sha256)"
 ROM_CRC32="$(python3 "$IDENTITY_TOOL" rom_identity.txt --get expected_crc32)"
 
-# mods/ is the catalog the build stages beside the executable, and the package
-# a netplay host transfers to a guest. Add --runtime-dir <name> for any other
-# directory the game loads exe-relative (translations, ...).
-exec bash "$IMPL" \
+# Stage the updater beside the host executable. The same updater is
+# copied by CMake for local builds; official setup packs also carry provenance
+# and a CA bundle so TLS verification works with the portable Python runtime.
+HOST=""
+for candidate in "$BUILD_DIR/KirbySuperStarSNESRecomp.exe" \
+                 "$BUILD_DIR/Release/KirbySuperStarSNESRecomp.exe" \
+                 "$BUILD_DIR/KirbySuperStarSNESRecomp"; do
+  if [[ -f "$candidate" ]]; then HOST="$candidate"; break; fi
+done
+if [[ -z "$HOST" ]]; then
+  echo "package_release.sh: KirbySuperStarSNESRecomp not found under $BUILD_DIR" >&2
+  exit 1
+fi
+HOST_DIR="$(cd "$(dirname "$HOST")" && pwd)"
+UPDATE_DIR="$HOST_DIR/update"
+mkdir -p "$UPDATE_DIR"
+cp tools/in_app_updater.py "$UPDATE_DIR/updater.py"
+curl -fsSL --retry 5 --retry-delay 2 \
+  -o "$UPDATE_DIR/cacert.pem" https://curl.se/ca/cacert.pem
+if ! grep -q 'BEGIN CERTIFICATE' "$UPDATE_DIR/cacert.pem"; then
+  echo "error: updater CA bundle download is empty or invalid" >&2
+  exit 1
+fi
+COMMIT_ID="$(git rev-parse HEAD)"
+PACK_VERSION="${RELEASE_VERSION:-$(tr -d '[:space:]' < VERSION)}"
+printf '{\n  "repository": "NVDEMU/KirbySuperStarPC",\n  "commit": "%s",\n  "version": "%s",\n  "platform": "%s"\n}\n' \
+  "$COMMIT_ID" "$PACK_VERSION" "$PLATFORM" > "$UPDATE_DIR/BUILD_PROVENANCE.json"
+
+# The portable ZIP is a setup pack, not a precompiled game. The player creates
+# ROM-derived code locally; the updater preserves it and reopens the setup host
+# so the player can run Generate & rebuild after a Nightly source update.
+bash "$IMPL" \
   --runtime-dir mods \
+  --runtime-dir update \
   --build-dir "$BUILD_DIR" \
   --artifact "$PLATFORM" \
   --exe-name KirbySuperStarSNESRecomp \
