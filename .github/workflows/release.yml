@@ -1,39 +1,20 @@
-# Build the Kirby Super Star SETUP PACK for Linux, Windows, macOS
-# arm64 and macOS Intel, tag the commit, and publish the four zips as a
-# GitHub Release.
+# Build Kirby Super Star setup packs for four platforms.
 #
-# HUMAN-TRIGGERED ONLY. There is no push, pull_request or schedule trigger and
-# there must never be one: a run is a release decision, made by a person on
-# the Actions page. Releases across the port set are driven from the studio
-# bulk tool, and a per-push run would compete with it for minutes and for the
-# meaning of "did CI pass".
+# Manual dispatch makes versioned vX.Y.Z releases. Commits to main publish the
+# stable-name Nightly release used by the in-app updater. A Nightly contains a
+# setup host plus source and portable build tools; players generate the game
+# locally from their own ROM. No ROM or generated ROM-derived C is distributed.
 #
-# WHAT A RUN DOES, with the defaults:
-#   1. Picks the next version: the latest v* tag with its patch number bumped
-#      (or VERSION when there is no tag yet, or whatever `version` says).
-#   2. Builds the setup host for all four platforms with that version as the
-#      lobby pin, and packages it.
-#   3. Tags the commit the run was started from as vX.Y.Z and publishes a
-#      public GitHub Release with the four zips. Uncheck publish_release for a
-#      dry run that only uploads workflow artifacts.
+# Nightly assets are overwritten in place. Their SHA-256 files and
+# nightly-manifest.json are consumed by tools/in_app_updater.py.
 #
-# WHAT THIS BUILDS. Not the game. src/gen/*.c is recompiler output derived
-# from ROM bytes: never committed, never in CI, never in a zip. What CI can
-# honestly produce is the SETUP HOST -- the same executable built with
-# -DSNESRECOMP_SETUP_HOST=ON, i.e. without recompiled code -- packaged with
-# the recompiler and this source tree. On the player's machine the launcher
-# takes their own ROM, generates, rebuilds, and relaunches into the real game.
-#
-# THE TOOLCHAIN. Each pack is built with the retcomm-toolchains cmake-clang-v1
-# pack, because that is what the player's own rebuild uses: if it cannot build
-# this game, CI is where that must fail. By default the pack is embedded in
-# the zip (embed_toolchain) so first run downloads nothing; turn it off for a
-# lean zip that fetches the pack on demand (Linux pack ~800 MB, Windows
-# ~200 MB, macOS ~90 MB).
+# The toolchain is embedded by default so the first run needs no tool download.
 
 name: Release
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       publish_release:
@@ -64,7 +45,7 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -105,6 +86,15 @@ jobs:
           IN_PUBLISH: ${{ inputs.publish_release }}
         run: |
           set -euo pipefail
+          # Pushes to main publish the rolling Nightly. Workflow dispatches
+          # remain deliberate, versioned releases or dry runs.
+          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF_TYPE}" == "branch" ]]; then
+            echo "version=Nightly" >>"$GITHUB_OUTPUT"
+            echo "tag=Nightly" >>"$GITHUB_OUTPUT"
+            echo "publish=true" >>"$GITHUB_OUTPUT"
+            echo "publishing Nightly from ${GITHUB_SHA::12}"
+            exit 0
+          fi
           PUBLISH=true
           [[ "${IN_PUBLISH}" == "false" ]] && PUBLISH=false
           FILE_VER="$(tr -d '[:space:]' < VERSION)"
@@ -188,6 +178,17 @@ jobs:
         with:
           submodules: recursive
           fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Test updater safety
+        run: |
+          set -euo pipefail
+          python -m py_compile tools/in_app_updater.py tools/test_nightly_updater.py tools/apply_kirby_updater_patch.py
+          python tools/test_nightly_updater.py
+          bash -n scripts/package_release.sh
 
       - name: Record framework pins
         run: bash snesrecomp/tools/ci/record_pins.sh
@@ -298,25 +299,70 @@ jobs:
         with:
           path: artifacts
 
-      - name: Collect zips
+      - name: Collect zips and generate updater metadata
+        env:
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+          RELEASE_TAG_NAME: ${{ needs.preflight.outputs.tag }}
         run: |
           set -euo pipefail
           mkdir -p dist
           find artifacts -type f -name "${ZIP_PREFIX}-*.zip" -exec cp -v {} dist/ \;
-          # Four platforms in, four zips out. A release that silently carries
-          # three is the failure this counts for.
-          count="$(find dist -name "${ZIP_PREFIX}-*.zip" | wc -l | tr -d ' ')"
+          count="$(find dist -maxdepth 1 -name "${ZIP_PREFIX}-*.zip" | wc -l | tr -d ' ')"
           if [[ "${count}" -ne 4 ]]; then
             echo "::error::expected 4 platform zips, found ${count}"
             ls -la dist
             exit 1
           fi
           ( cd dist && sha256sum "${ZIP_PREFIX}"-*.zip > SHA256SUMS )
+          for platform in linux-x64 windows-x64 macos-arm64 macos-x64; do
+            filename="${ZIP_PREFIX}-${RELEASE_VERSION}-${platform}.zip"
+            if [[ ! -f "dist/${filename}" ]]; then
+              echo "::error::missing updater package dist/${filename}"
+              ls -la dist
+              exit 1
+            fi
+            ( cd dist && sha256sum "${filename}" > "SHA256SUMS-${platform}.txt" )
+          done
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          version = os.environ["RELEASE_VERSION"]
+          tag = os.environ["RELEASE_TAG_NAME"]
+          metadata = {
+              "repository": "NVDEMU/KirbySuperStarPC",
+              "channel": "nightly" if tag == "Nightly" else "release",
+              "tag": tag,
+              "version": version,
+              "commit": os.environ["GITHUB_SHA"],
+              "platforms": {
+                  "linux-x64": f"kirbysuperstar-{version}-linux-x64.zip",
+                  "windows-x64": f"kirbysuperstar-{version}-windows-x64.zip",
+                  "macos-arm64": f"kirbysuperstar-{version}-macos-arm64.zip",
+                  "macos-x64": f"kirbysuperstar-{version}-macos-x64.zip",
+              },
+          }
+          Path("dist/nightly-manifest.json").write_text(
+              json.dumps(metadata, indent=2) + "\n", encoding="utf-8"
+          )
+          print(f"Generated checksums and manifest for {tag}")
+          PY
           cat dist/SHA256SUMS
 
       # The tag is created here, after all four builds succeeded, so a failed
       # build never leaves a version number claimed by nothing.
+      - name: Move Nightly tag to the built commit
+        if: github.event_name == 'push' && github.ref_type == 'branch'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f Nightly "${GITHUB_SHA}"
+          git push origin refs/tags/Nightly --force
+
       - name: Tag the commit
+        if: github.event_name == 'workflow_dispatch'
         env:
           TAG: ${{ needs.preflight.outputs.tag }}
         run: |
@@ -366,10 +412,14 @@ jobs:
         with:
           tag_name: ${{ needs.preflight.outputs.tag }}
           target_commitish: ${{ github.sha }}
-          name: "Kirby Super Star ${{ needs.preflight.outputs.tag }}"
+          name: ${{ needs.preflight.outputs.tag == 'Nightly' && 'Kirby Super Star Recomp Nightly' || format('Kirby Super Star Recomp {0}', needs.preflight.outputs.tag) }}
+          prerelease: ${{ needs.preflight.outputs.tag == 'Nightly' }}
+          overwrite_files: true
           body_path: notes.md
           files: |
             dist/${{ env.ZIP_PREFIX }}-*.zip
             dist/SHA256SUMS
+            dist/SHA256SUMS-*.txt
+            dist/nightly-manifest.json
           fail_on_unmatched_files: true
-          make_latest: true
+          make_latest: ${{ needs.preflight.outputs.tag == 'Nightly' && 'false' || 'true' }}
