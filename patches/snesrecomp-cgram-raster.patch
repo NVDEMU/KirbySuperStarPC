@@ -1,0 +1,76 @@
+diff --git a/runner/src/snes/ppu.c b/runner/src/snes/ppu.c
+--- a/runner/src/snes/ppu.c
++++ b/runner/src/snes/ppu.c
+@@ -3191,8 +3191,10 @@
+ typedef struct {
+   uint8_t regs[PPU_SAVESTATE_REGS_SIZE];   /* inidisp..cgwsel at field start */
+   uint8_t scrollPrev, scrollPrev2, m7prev;
+   uint8_t hdmaen;
++  uint16_t cgram[0x100];                 /* palette at field start */
++  uint8_t cgramPointer, cgramSecondWrite, cgramBuffer;
+   int count;
+   uint32_t dropped;
+   PpuRasterEntry e[PPU_RASTER_MAX];
+ } PpuRasterField;
+@@ -3208,5 +3210,7 @@
+ static struct {
+   uint8_t oamAdr, oamInHigh, oamSecondWrite, oamBuffer;
++  uint8_t cgramPointer, cgramSecondWrite, cgramBuffer;
+ } s_raster_port;
+ 
++static uint16_t s_raster_current_cgram[0x100];
+ /* Only the machine's PPU journals: the debug server and a few tools run
+@@ -3227,7 +3231,6 @@
+   switch (reg) {
+     case 0x2104:                                       /* OAMDATA */
+     case 0x2115: case 0x2116: case 0x2117:             /* VRAM port */
+     case 0x2118: case 0x2119:
+-    case 0x2121: case 0x2122:                          /* CGRAM port */
+       return 0;
+     default:
+@@ -3238,5 +3241,9 @@
+ static void raster_snapshot(PpuRasterField *f, const Ppu *ppu) {
+   memcpy(f->regs, &ppu->inidisp, PPU_SAVESTATE_REGS_SIZE);
++  memcpy(f->cgram, ppu->cgram, sizeof(f->cgram));
++  f->cgramPointer = ppu->cgramPointer;
++  f->cgramSecondWrite = ppu->cgramSecondWrite;
++  f->cgramBuffer = ppu->cgramBuffer;
+   f->scrollPrev = ppu->scrollPrev;
+   f->scrollPrev2 = ppu->scrollPrev2;
+   f->m7prev = ppu->m7prev;
+@@ -3312,8 +3319,17 @@
+   s_raster_port.oamAdr = ppu->oamAdr;
+   s_raster_port.oamInHigh = ppu->oamInHigh;
+   s_raster_port.oamSecondWrite = ppu->oamSecondWrite;
+   s_raster_port.oamBuffer = ppu->oamBuffer;
++  s_raster_port.cgramPointer = ppu->cgramPointer;
++  s_raster_port.cgramSecondWrite = ppu->cgramSecondWrite;
++  s_raster_port.cgramBuffer = ppu->cgramBuffer;
++  memcpy(s_raster_current_cgram, ppu->cgram,
++         sizeof(s_raster_current_cgram));
+   memcpy(&ppu->inidisp, f->regs, PPU_SAVESTATE_REGS_SIZE);
++  memcpy(ppu->cgram, f->cgram, sizeof(f->cgram));
++  ppu->cgramPointer = f->cgramPointer;
++  ppu->cgramSecondWrite = f->cgramSecondWrite;
++  ppu->cgramBuffer = f->cgramBuffer;
+   ppu->scrollPrev = f->scrollPrev;
+   ppu->scrollPrev2 = f->scrollPrev2;
+   ppu->m7prev = f->m7prev;
+@@ -3367,12 +3383,17 @@
+   if (!s_raster_armed || !s_raster_rendering) return;
+   s_raster_rendering = 0;
+   if (s_raster_have_completed) {
+     f = &s_field[s_raster_cur];
+     for (i = 0; i < f->count; i++)
+       if (f->e[i].reg != 0x420C)
+         raster_replay(ppu, f->e[i].reg, f->e[i].val);
+   }
++  memcpy(ppu->cgram, s_raster_current_cgram,
++         sizeof(s_raster_current_cgram));
++  ppu->cgramPointer = s_raster_port.cgramPointer;
++  ppu->cgramSecondWrite = s_raster_port.cgramSecondWrite;
++  ppu->cgramBuffer = s_raster_port.cgramBuffer;
+   ppu->oamAdr = s_raster_port.oamAdr;
+   ppu->oamInHigh = s_raster_port.oamInHigh;
+   ppu->oamSecondWrite = s_raster_port.oamSecondWrite;
+   ppu->oamBuffer = s_raster_port.oamBuffer;

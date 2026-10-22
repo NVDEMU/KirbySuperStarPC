@@ -27,6 +27,41 @@ if(NOT EXISTS "${SNESRECOMP_ROOT}/runner/runner.cmake")
         "snesrecomp submodule missing at ${SNESRECOMP_ROOT}.\n"
         "Run: git submodule update --init --recursive")
 endif()
+
+# Kirby performs a CGRAM DMA during active display (line 168). The pinned
+# framework's deferred raster renderer must replay those writes at their beam
+# positions instead of using the field's final palette for every scanline.
+# This project-local patch is deliberately tied to the pinned framework tree.
+set(_KIRBY_CGRAM_RASTER_PATCH
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/snesrecomp-cgram-raster.patch")
+execute_process(
+    COMMAND git apply --check "${_KIRBY_CGRAM_RASTER_PATCH}"
+    WORKING_DIRECTORY "${SNESRECOMP_ROOT}"
+    RESULT_VARIABLE _kirby_cgram_patch_check
+    OUTPUT_QUIET ERROR_QUIET)
+if("${_kirby_cgram_patch_check}" STREQUAL "0")
+    execute_process(
+        COMMAND git apply "${_KIRBY_CGRAM_RASTER_PATCH}"
+        WORKING_DIRECTORY "${SNESRECOMP_ROOT}"
+        RESULT_VARIABLE _kirby_cgram_patch_apply)
+    if(NOT "${_kirby_cgram_patch_apply}" STREQUAL "0")
+        message(FATAL_ERROR
+            "Failed to apply the Kirby CGRAM raster patch to ${SNESRECOMP_ROOT}.")
+    endif()
+else()
+    # Reconfiguration is common. Accept an already-applied patch, but fail
+    # visibly if the pinned framework source has drifted from its known context.
+    execute_process(
+        COMMAND git apply --reverse --check "${_KIRBY_CGRAM_RASTER_PATCH}"
+        WORKING_DIRECTORY "${SNESRECOMP_ROOT}"
+        RESULT_VARIABLE _kirby_cgram_patch_reverse_check
+        OUTPUT_QUIET ERROR_QUIET)
+    if(NOT "${_kirby_cgram_patch_reverse_check}" STREQUAL "0")
+        message(FATAL_ERROR
+            "The Kirby CGRAM raster patch no longer matches the snesrecomp source. "
+            "Review patches/snesrecomp-cgram-raster.patch before updating the framework pin.")
+    endif()
+endif()
 # Mod packages are part of every project, not an option. The launcher's Mods
 # page, the .snesmod loader, the trusted-plugin registry and netplay's mod-set
 # gate all hang off this one switch; a build without it cannot exchange mods
