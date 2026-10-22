@@ -20,7 +20,7 @@ diff --git a/runner/src/snes/ppu.c b/runner/src/snes/ppu.c
  
 +static uint16_t s_raster_current_cgram[0x100];
  /* Only the machine's PPU journals: the debug server and a few tools run
-@@ -3228,6 +3232,5 @@
+@@ -3227,7 +3231,6 @@
    switch (reg) {
      case 0x2104:                                       /* OAMDATA */
      case 0x2115: case 0x2116: case 0x2117:             /* VRAM port */
