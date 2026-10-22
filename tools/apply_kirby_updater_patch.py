@@ -43,17 +43,19 @@ static bool launch_kirby_nightly_updater(std::string* error) {
     }
     const std::filesystem::path base = std::filesystem::path(base_raw).lexically_normal();
     std::filesystem::path root = base;
-    std::filesystem::path script = root / "update" / "updater.py";
-    if (!std::filesystem::is_regular_file(script)) {
-        const std::filesystem::path parent = (base / "..").lexically_normal();
-        if (std::filesystem::is_regular_file(parent / "update" / "updater.py")) {
-            root = parent;
-            script = root / "update" / "updater.py";
-        }
+    const std::filesystem::path parent = (base / "..").lexically_normal();
+    // A generated build lives in <setup-pack>/build. Prefer the parent pack
+    // whenever it has provenance; a local build/update helper alone is not
+    // enough to make the build directory a safe installation target.
+    if (!std::filesystem::is_regular_file(root / "update" / "BUILD_PROVENANCE.json") &&
+        std::filesystem::is_regular_file(parent / "update" / "BUILD_PROVENANCE.json")) {
+        root = parent;
     }
-    if (!std::filesystem::is_regular_file(script)) {
+    const std::filesystem::path script = root / "update" / "updater.py";
+    if (!std::filesystem::is_regular_file(script) ||
+        !std::filesystem::is_regular_file(root / "update" / "BUILD_PROVENANCE.json")) {
         if (error) *error =
-            "The updater helper is missing. Download the newest Kirby Nightly setup pack manually.";
+            "This is not an official packaged setup pack with updater metadata. Download the newest Kirby Nightly setup pack manually.";
         return false;
     }
 
