@@ -1,0 +1,54 @@
+diff --git a/runner/src/snes/ppu.c b/runner/src/snes/ppu.c
+--- a/runner/src/snes/ppu.c
++++ b/runner/src/snes/ppu.c
+@@
+ typedef struct {
+   uint8_t regs[PPU_SAVESTATE_REGS_SIZE];   /* inidisp..cgwsel at field start */
+   uint8_t scrollPrev, scrollPrev2, m7prev;
+   uint8_t hdmaen;
++  uint16_t cgram[0x100];                 /* palette at field start */
+   int count;
+   uint32_t dropped;
+   PpuRasterEntry e[PPU_RASTER_MAX];
+ } PpuRasterField;
+@@
+ static struct {
+   uint8_t oamAdr, oamInHigh, oamSecondWrite, oamBuffer;
+ } s_raster_port;
++/* Rendering rewinds CGRAM to the completed field's baseline. Preserve the
++ * live palette too, so finishing a diagnostic/production render cannot leave
++ * the CPU half of the next field with historical palette contents. */
++static uint16_t s_raster_current_cgram[0x100];
+@@
+   switch (reg) {
+     case 0x2104:                                       /* OAMDATA */
+     case 0x2115: case 0x2116: case 0x2117:             /* VRAM port */
+     case 0x2118: case 0x2119:
+-    case 0x2121: case 0x2122:                          /* CGRAM port */
+       return 0;
+@@
+ static void raster_snapshot(PpuRasterField *f, const Ppu *ppu) {
+   memcpy(f->regs, &ppu->inidisp, PPU_SAVESTATE_REGS_SIZE);
++  memcpy(f->cgram, ppu->cgram, sizeof(f->cgram));
+   f->scrollPrev = ppu->scrollPrev;
+@@
+   s_raster_port.oamAdr = ppu->oamAdr;
+   s_raster_port.oamInHigh = ppu->oamInHigh;
+   s_raster_port.oamSecondWrite = ppu->oamSecondWrite;
+   s_raster_port.oamBuffer = ppu->oamBuffer;
++  memcpy(s_raster_current_cgram, ppu->cgram,
++         sizeof(s_raster_current_cgram));
+   memcpy(&ppu->inidisp, f->regs, PPU_SAVESTATE_REGS_SIZE);
++  memcpy(ppu->cgram, f->cgram, sizeof(f->cgram));
+   ppu->scrollPrev = f->scrollPrev;
+@@
+   if (s_raster_have_completed) {
+     f = &s_field[s_raster_cur];
+     for (i = 0; i < f->count; i++)
+       if (f->e[i].reg != 0x420C)
+         raster_replay(ppu, f->e[i].reg, f->e[i].val);
+   }
++  memcpy(ppu->cgram, s_raster_current_cgram,
++         sizeof(s_raster_current_cgram));
+   ppu->oamAdr = s_raster_port.oamAdr;
+*** End Patch
