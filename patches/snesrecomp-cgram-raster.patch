@@ -57,6 +57,8 @@ diff --git a/runner/src/snes/ppu.c b/runner/src/snes/ppu.c
    ppu->scrollPrev2 = f->scrollPrev2;
    ppu->m7prev = f->m7prev;
 @@ -3367,12 +3383,16 @@
+   if (!s_raster_armed || !s_raster_rendering) return;
+   s_raster_rendering = 0;
    if (s_raster_have_completed) {
      f = &s_field[s_raster_cur];
      for (i = 0; i < f->count; i++)
@@ -70,4 +72,5 @@ diff --git a/runner/src/snes/ppu.c b/runner/src/snes/ppu.c
 +  ppu->cgramBuffer = s_raster_port.cgramBuffer;
    ppu->oamAdr = s_raster_port.oamAdr;
    ppu->oamInHigh = s_raster_port.oamInHigh;
-   ppu->oamSecondWrite = s_raster_port.oamSecondWrite;
+   ppu->oamSecondWrite = s_raster_port.cgramSecondWrite;
+   ppu->oamBuffer = s_raster_port.oamBuffer;
