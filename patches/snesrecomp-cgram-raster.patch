@@ -1,7 +1,7 @@
 diff --git a/runner/src/snes/ppu.c b/runner/src/snes/ppu.c
 --- a/runner/src/snes/ppu.c
 +++ b/runner/src/snes/ppu.c
-@@
+@@ -3191,8 +3191,9 @@
  typedef struct {
    uint8_t regs[PPU_SAVESTATE_REGS_SIZE];   /* inidisp..cgwsel at field start */
    uint8_t scrollPrev, scrollPrev2, m7prev;
@@ -11,27 +11,29 @@ diff --git a/runner/src/snes/ppu.c b/runner/src/snes/ppu.c
    uint32_t dropped;
    PpuRasterEntry e[PPU_RASTER_MAX];
  } PpuRasterField;
-@@
+@@ -3208,5 +3209,7 @@
  static struct {
    uint8_t oamAdr, oamInHigh, oamSecondWrite, oamBuffer;
  } s_raster_port;
-+/* Rendering rewinds CGRAM to the completed field's baseline. Preserve the
-+ * live palette too, so finishing a diagnostic/production render cannot leave
-+ * the CPU half of the next field with historical palette contents. */
+ 
++/* Preserve the live palette while rebuilding an earlier field. */
 +static uint16_t s_raster_current_cgram[0x100];
-@@
+ /* Only the machine's PPU journals: the debug server and a few tools run
+@@ -3228,6 +3231,5 @@
    switch (reg) {
      case 0x2104:                                       /* OAMDATA */
      case 0x2115: case 0x2116: case 0x2117:             /* VRAM port */
      case 0x2118: case 0x2119:
 -    case 0x2121: case 0x2122:                          /* CGRAM port */
        return 0;
-@@
+     default:
+@@ -3238,4 +3240,5 @@
  static void raster_snapshot(PpuRasterField *f, const Ppu *ppu) {
    memcpy(f->regs, &ppu->inidisp, PPU_SAVESTATE_REGS_SIZE);
 +  memcpy(f->cgram, ppu->cgram, sizeof(f->cgram));
    f->scrollPrev = ppu->scrollPrev;
-@@
+   f->scrollPrev2 = ppu->scrollPrev2;
+@@ -3312,7 +3315,9 @@
    s_raster_port.oamAdr = ppu->oamAdr;
    s_raster_port.oamInHigh = ppu->oamInHigh;
    s_raster_port.oamSecondWrite = ppu->oamSecondWrite;
@@ -41,7 +43,8 @@ diff --git a/runner/src/snes/ppu.c b/runner/src/snes/ppu.c
    memcpy(&ppu->inidisp, f->regs, PPU_SAVESTATE_REGS_SIZE);
 +  memcpy(ppu->cgram, f->cgram, sizeof(f->cgram));
    ppu->scrollPrev = f->scrollPrev;
-@@
+   ppu->scrollPrev2 = f->scrollPrev2;
+@@ -3367,12 +3372,13 @@
    if (s_raster_have_completed) {
      f = &s_field[s_raster_cur];
      for (i = 0; i < f->count; i++)
@@ -51,4 +54,5 @@ diff --git a/runner/src/snes/ppu.c b/runner/src/snes/ppu.c
 +  memcpy(ppu->cgram, s_raster_current_cgram,
 +         sizeof(s_raster_current_cgram));
    ppu->oamAdr = s_raster_port.oamAdr;
-*** End Patch
+   ppu->oamInHigh = s_raster_port.oamInHigh;
+   ppu->oamSecondWrite = s_raster_port.oamSecondWrite;
