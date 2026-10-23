@@ -38,6 +38,9 @@ jobs:
       - name: Check release packager shell syntax
         run: bash -n scripts/package_release.sh
 
+      - name: Parse release workflow YAML
+        run: ruby -e 'require "yaml"; YAML.load_file(".github/workflows/release.yml"); puts "release workflow YAML parsed"'
+
       - name: Apply launcher updater patch
         run: |
           python tools/apply_kirby_updater_patch.py --ui-root recomp-ui
