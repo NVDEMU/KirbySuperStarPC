@@ -179,7 +179,6 @@ jobs:
       RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
       # Optional private source for the pinned ROM. The URL/token stay in Actions secrets.
       KIRBY_ROM_URL: ${{ secrets.KIRBY_ROM_URL }}
-      KIRBY_ROM_TOKEN: ${{ secrets.KIRBY_ROM_TOKEN }}
 
     steps:
       - name: Checkout
@@ -354,15 +353,15 @@ jobs:
           set -euo pipefail
           source "${TOOLCHAIN_DIR}/env.sh"
           ROM="$RUNNER_TEMP/kirby-super-star-release.sfc"
-          if [[ -n "${KIRBY_ROM_TOKEN:-}" ]]; then
-            curl --fail --location --silent --show-error --retry 3 \
-              --header "Authorization: Bearer ${KIRBY_ROM_TOKEN}" \
-              --output "$ROM" "$KIRBY_ROM_URL"
-          else
-            curl --fail --location --silent --show-error --retry 3 \
-              --output "$ROM" "$KIRBY_ROM_URL"
-          fi
-          test -s "$ROM" || { echo "::error::ROM download was empty."; exit 1; }
+          # Mega share links need MEGA's API and link decryption key. A plain
+          # curl fetch returns the ~2 KB browser page, not the ROM bytes.
+          node --version
+          npm --version
+          npm install --prefix "$RUNNER_TEMP/mega-rom-downloader" --no-save --ignore-scripts megajs@1.3.10
+          KIRBY_ROM_OUTPUT="$ROM" \
+            NODE_PATH="$RUNNER_TEMP/mega-rom-downloader/node_modules" \
+            node scripts/download_mega_rom.cjs
+          test -s "$ROM" || { echo "::error::MEGA ROM download was empty."; exit 1; }
           EXTRA=()
           if [[ -n "${SNESRECOMP_SDL3_SOURCE_DIR:-}" ]]; then
             EXTRA+=("-DSNESRECOMP_SDL3_SOURCE_DIR=${SNESRECOMP_SDL3_SOURCE_DIR}")
