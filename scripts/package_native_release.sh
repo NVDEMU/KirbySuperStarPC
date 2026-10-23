@@ -244,6 +244,10 @@ fi
 exit 0
 APP_RUN
     chmod +x "$APPDIR/AppRun"
+    # Validate the generated launcher before it is packed into the AppImage.
+    bash -n "$APPDIR/AppRun"
+    test -x "$APPDIR/AppRun"
+    test -x "$APPDIR/usr/bin/KirbySuperStarSNESRecomp"
 
     cat > "$APPDIR/usr/share/applications/kirbysuperstar.desktop" <<'DESKTOP'
 [Desktop Entry]
