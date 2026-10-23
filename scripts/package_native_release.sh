@@ -38,7 +38,10 @@ case "$PLATFORM" in
     [[ -f "$CSC" ]] || CSC="/c/Windows/Microsoft.NET/Framework/v4.0.30319/csc.exe"
     [[ -f "$CSC" ]] || { echo "::error::csc.exe is missing on the Windows runner." >&2; exit 1; }
     OUT="$DIST/kirbysuperstar-$VERSION-windows-x64.exe"
-    "$CSC" /nologo /target:winexe \
+    # Git Bash/MSYS rewrites slash-prefixed C# compiler switches such as
+    # /nologo into filesystem paths (for example C:/Program Files/Git/nologo).
+    # Disable argument path conversion for this one native Windows tool call.
+    MSYS2_ARG_CONV_EXCL='*' "$CSC" /nologo /target:winexe \
       "/out:$(cygpath -w "$OUT")" \
       /reference:System.Windows.Forms.dll \
       /reference:System.Drawing.dll \
