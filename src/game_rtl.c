@@ -65,12 +65,12 @@ static void kirby_dump_wait_loop(void)
     const uint32_t pc = 0x00D5E9;
     const uint16_t stz = kirby_diag_read16(pc + 1);
     const uint8_t lda1 = snes_read(g_snes, pc + 4);
-    const uint16_t sta1 = kirby_diag_read16(pc + 5);
-    const uint8_t lda2 = snes_read(g_snes, pc + 8);
-    const uint16_t sta2 = kirby_diag_read16(pc + 9);
-    const uint16_t sta3 = kirby_diag_read16(pc + 14);
-    const uint16_t cmp = kirby_diag_read16(pc + 17);
-    const int8_t branch = (int8_t)snes_read(g_snes, pc + 20);
+    const uint16_t sta1 = kirby_diag_read16(pc + 6);
+    const uint8_t lda2 = snes_read(g_snes, pc + 9);
+    const uint16_t sta2 = kirby_diag_read16(pc + 11);
+    const uint16_t sta3 = kirby_diag_read16(pc + 15);
+    const uint16_t cmp = kirby_diag_read16(pc + 18);
+    const int8_t branch = (int8_t)snes_read(g_snes, pc + 21);
 
     fprintf(stderr,
             "[kirby_boot] loop $00D5E9: STZ $%04X; LDA #$%02X; STA $%04X; "
