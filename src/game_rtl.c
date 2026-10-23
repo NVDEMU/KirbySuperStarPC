@@ -41,6 +41,7 @@
 #include "cpu_state.h"
 #include "snes/interp_bridge.h"
 #include "snes/snes.h"
+#include "snes/spc.h"
 
 extern CpuState g_cpu;
 extern Snes *g_snes;
@@ -89,6 +90,25 @@ static void kirby_dump_wait_loop(void)
             (unsigned)g_snes->ppu->cgram[0],
             (unsigned)g_snes->hPos, (unsigned)g_snes->vPos,
             (unsigned)g_snes->inVblank, (unsigned)g_snes->nmiEnabled);
+    fprintf(stderr,
+            "[kirby_boot] APU wait: SPC_PC=%04X stopped=%u IPL_ROM=%u "
+            "IN=%02X,%02X,%02X,%02X OUT=%02X,%02X,%02X,%02X "
+            "apu_cycles=%llu port_clock=%llu catchup=%.1f cpu_left=%u\n",
+            g_snes->apu && g_snes->apu->spc ? (unsigned)g_snes->apu->spc->pc : 0u,
+            g_snes->apu && g_snes->apu->spc ? (unsigned)g_snes->apu->spc->stopped : 0u,
+            g_snes->apu ? (unsigned)g_snes->apu->romReadable : 0u,
+            g_snes->apu ? (unsigned)g_snes->apu->inPorts[0] : 0u,
+            g_snes->apu ? (unsigned)g_snes->apu->inPorts[1] : 0u,
+            g_snes->apu ? (unsigned)g_snes->apu->inPorts[2] : 0u,
+            g_snes->apu ? (unsigned)g_snes->apu->inPorts[3] : 0u,
+            g_snes->apu ? (unsigned)g_snes->apu->outPorts[0] : 0u,
+            g_snes->apu ? (unsigned)g_snes->apu->outPorts[1] : 0u,
+            g_snes->apu ? (unsigned)g_snes->apu->outPorts[2] : 0u,
+            g_snes->apu ? (unsigned)g_snes->apu->outPorts[3] : 0u,
+            (unsigned long long)(g_snes->apu ? g_snes->apu->cycles : 0u),
+            (unsigned long long)(g_snes->apu ? g_snes->apu->portClock : 0u),
+            g_snes->apu ? g_snes->apuCatchupCycles : 0.0,
+            g_snes->apu ? (unsigned)g_snes->apu->cpuCyclesLeft : 0u);
 }
 
 static void kirby_boot_trace(unsigned frame, const char *phase)
