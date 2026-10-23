@@ -50,7 +50,8 @@ on:
 # race while the Nightly tag and release assets are replaced.
 concurrency:
   group: kirby-release-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: false
+  # Nightly is a rolling channel: only the newest main commit should publish.
+  cancel-in-progress: true
 
 permissions:
   contents: read
