@@ -177,6 +177,9 @@ jobs:
       # The lobby pin compiled into the binary and written into the pack's
       # VERSION, so the tag, the binary and the player's own rebuild agree.
       RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+      # Optional private source for the pinned ROM. The URL/token stay in Actions secrets.
+      KIRBY_ROM_URL: ${{ secrets.KIRBY_ROM_URL }}
+      KIRBY_ROM_TOKEN: ${{ secrets.KIRBY_ROM_TOKEN }}
 
     steps:
       - name: Checkout
@@ -212,7 +215,7 @@ jobs:
           set -euo pipefail
           python -m py_compile tools/in_app_updater.py tools/test_nightly_updater.py tools/apply_kirby_updater_patch.py
           python tools/test_nightly_updater.py
-          bash -n scripts/package_release.sh scripts/package_native_release.sh scripts/macos_app_launcher.sh scripts/package_playable_macos_app.sh
+          bash -n scripts/package_release.sh scripts/package_native_release.sh scripts/macos_app_launcher.sh scripts/package_playable_macos_app.sh scripts/package_playable_release.sh
 
       - name: Record framework pins
         run: bash snesrecomp/tools/ci/record_pins.sh
@@ -343,16 +346,54 @@ jobs:
               print(f"Verified {archive_path}: no rom.cfg, ROM images, generated code, or per-machine state.")
           PY
 
+      # When a private verified-ROM URL is configured, generate the game code
+      # only in this ephemeral runner and publish playable, platform-native outputs.
+      - name: Build and package playable native release
+        if: env.KIRBY_ROM_URL != ''
+        run: |
+          set -euo pipefail
+          source "${TOOLCHAIN_DIR}/env.sh"
+          ROM="$RUNNER_TEMP/kirby-super-star-release.sfc"
+          if [[ -n "${KIRBY_ROM_TOKEN:-}" ]]; then
+            curl --fail --location --silent --show-error --retry 3 \
+              --header "Authorization: Bearer ${KIRBY_ROM_TOKEN}" \
+              --output "$ROM" "$KIRBY_ROM_URL"
+          else
+            curl --fail --location --silent --show-error --retry 3 \
+              --output "$ROM" "$KIRBY_ROM_URL"
+          fi
+          test -s "$ROM" || { echo "::error::ROM download was empty."; exit 1; }
+          EXTRA=()
+          if [[ -n "${SNESRECOMP_SDL3_SOURCE_DIR:-}" ]]; then
+            EXTRA+=("-DSNESRECOMP_SDL3_SOURCE_DIR=${SNESRECOMP_SDL3_SOURCE_DIR}")
+          fi
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            EXTRA+=("-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0")
+          fi
+          JOBS="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
+          bash tools/regen.sh --rom "$ROM"
+          cmake -S . -B build-playable -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSNESRECOMP_SETUP_HOST=OFF \
+            -DSNESRECOMP_ENABLE_TRACE=OFF \
+            -DSNESRECOMP_BUILD_VERSION="${RELEASE_VERSION}" \
+            "${EXTRA[@]+ "${EXTRA[@]}"}"
+          cmake --build build-playable -j"$JOBS" --target "${EXE_NAME}"
+          rm -f "$ROM"
+          bash scripts/package_playable_release.sh build-playable "${{ matrix.artifact }}" "${RELEASE_VERSION}"
+          ls -lh dist/
+
+      # Without a private ROM URL the existing setup-native wrappers remain as fallback.
       - name: Package Windows setup installer
-        if: matrix.artifact == 'windows-x64'
+        if: env.KIRBY_ROM_URL == '' && matrix.artifact == 'windows-x64'
         run: bash scripts/package_native_release.sh "${{ matrix.artifact }}" "${RELEASE_VERSION}"
 
-      - name: Package macOS app and DMG
-        if: startsWith(matrix.artifact, 'macos-')
+      - name: Package macOS setup app and DMG
+        if: env.KIRBY_ROM_URL == '' && startsWith(matrix.artifact, 'macos-')
         run: bash scripts/package_native_release.sh "${{ matrix.artifact }}" "${RELEASE_VERSION}"
 
-      - name: Package Linux AppImage
-        if: matrix.artifact == 'linux-x64'
+      - name: Package Linux setup AppImage
+        if: env.KIRBY_ROM_URL == '' && matrix.artifact == 'linux-x64'
         run: bash scripts/package_native_release.sh "${{ matrix.artifact }}" "${RELEASE_VERSION}"
 
       - name: Verify native outputs
@@ -361,7 +402,12 @@ jobs:
         run: |
           set -euo pipefail
           case "${PLATFORM}" in
-            windows-x64) test -s "dist/kirbysuperstar-${RELEASE_VERSION}-windows-x64.exe" ;;
+            windows-x64)
+              test -s "dist/kirbysuperstar-${RELEASE_VERSION}-windows-x64.exe"
+              if [[ -n "${KIRBY_ROM_URL:-}" ]]; then
+                test -s "dist/kirbysuperstar-${RELEASE_VERSION}-windows-x64-playable.zip"
+              fi
+              ;;
             macos-arm64|macos-x64)
               test -s "dist/kirbysuperstar-${RELEASE_VERSION}-${PLATFORM}.dmg"
               test -s "dist/kirbysuperstar-${RELEASE_VERSION}-${PLATFORM}-app.zip"
@@ -507,12 +553,20 @@ jobs:
           {
             echo "Kirby Super Star Recomp ${TAG}"
             echo
-            echo "This release contains setup packs and native launch wrappers, not a prebuilt game."
-            echo "On first launch, choose your own ${ROM_FILE} (SHA-256 ${ROM_SHA256}), then select"
-            echo "Generate & rebuild. No ROM image or ROM-derived generated code is shipped."
-            echo
-            echo "The Windows EXE is a self-contained setup installer. The macOS DMG contains a"
-            echo "real .app bundle. The Linux AppImage initializes a writable per-user setup folder."
+            if [[ -n "${KIRBY_ROM_URL:-}" ]]; then
+              echo "This release includes playable native builds for macOS, Windows, and Linux."
+              echo "Each build includes the compiled recompiled program and requires your own verified"
+              echo "${ROM_FILE} at runtime. No ROM image or local ROM path is included."
+              echo "The Windows EXE installs the playable runtime and launches it; the macOS DMG"
+              echo "contains a real .app bundle; the Linux AppImage launches the playable build."
+            else
+              echo "This release contains setup packs and native launch wrappers, not a prebuilt game."
+              echo "On first launch, choose your own ${ROM_FILE} (SHA-256 ${ROM_SHA256}), then select"
+              echo "Generate & rebuild. No ROM image is shipped."
+              echo
+              echo "The Windows EXE is a self-contained setup installer. The macOS DMG contains a"
+              echo "real .app bundle. The Linux AppImage initializes a writable per-user setup folder."
+            fi
             echo "Your ROM path cache is created locally and is never included in release assets."
             echo
             echo "The portable ZIP is the updater payload, with a per-platform SHA-256 file."
