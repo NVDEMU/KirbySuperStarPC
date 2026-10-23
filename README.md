@@ -22,6 +22,9 @@ ROM only inside the temporary CI runner, verifies it, generates the game code,
 compiles each platform natively, and deletes the ROM before packaging. The
 optional `KIRBY_ROM_TOKEN` secret is sent as a Bearer token for private hosts.
 Without `KIRBY_ROM_URL`, the native assets remain the existing setup launchers.
+After adding or changing that Actions secret, push a commit to `main` or rerun
+the **Release** workflow from the Actions tab so Nightly is rebuilt with the new
+secret values.
 
 No ROM image, generated C source files, or machine-specific ROM path is shipped.
 Playable native executables contain the compiled recompiled program and still
