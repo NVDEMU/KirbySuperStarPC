@@ -34,11 +34,47 @@
 
 #include "game_rtl.h"
 
+#include <stdio.h>
+#include <stdlib.h>
+
 #include "beam_frame_driver.h"
+#include "cpu_state.h"
+#include "snes/interp_bridge.h"
+
+extern CpuState g_cpu;
+
+/* CI-only diagnostics for the current black-frame regression. These hooks are
+ * dormant unless the release smoke test explicitly enables them. */
+static unsigned s_kirby_diagnostic_frame;
+
+static void kirby_boot_trace(unsigned frame, const char *phase)
+{
+    if (getenv("SNESRECOMP_KIRBY_BOOT_TRACE") == NULL || frame > 12)
+        return;
+
+    fprintf(stderr,
+            "[kirby_boot] %s frame=%u resume_pc=%06X "
+            "A=%04X X=%04X Y=%04X S=%04X D=%04X "
+            "DB=%02X PB=%02X P=%02X master=%llu\n",
+            phase, frame, (unsigned)interp_bridge_lle_resume_pc(),
+            (unsigned)g_cpu.A, (unsigned)g_cpu.X, (unsigned)g_cpu.Y,
+            (unsigned)g_cpu.S, (unsigned)g_cpu.D, (unsigned)g_cpu.DB,
+            (unsigned)g_cpu.PB, (unsigned)g_cpu.P,
+            (unsigned long long)g_cpu.master_cycles);
+}
 
 void GameRunOneFrame(void)
 {
+    const unsigned frame = ++s_kirby_diagnostic_frame;
+    kirby_boot_trace(frame, "before");
     snes_beam_frame_driver_run_frame();
+    kirby_boot_trace(frame, "after");
+
+    if (getenv("SNESRECOMP_KIRBY_BOOT_TRACE") != NULL &&
+        (frame == 1 || frame == 12)) {
+        fprintf(stderr, "[kirby_boot] interpreter snapshot after frame %u\n", frame);
+        interp_bridge_dump_recent(128, stderr);
+    }
 }
 
 void GameDrawPpuFrame(void)
