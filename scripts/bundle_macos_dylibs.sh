@@ -33,6 +33,16 @@ lib_dir.mkdir(parents=True, exist_ok=True)
 def run(args):
     return subprocess.check_output(args, text=True, stderr=subprocess.STDOUT)
 
+def install_id(binary):
+    # otool -L includes a dylib's LC_ID_DYLIB as its first listed name.
+    # It is not a dependency and must not be resolved/re-written with -change.
+    lines = run(["otool", "-D", str(binary)]).splitlines()[1:]
+    for line in lines:
+        value = line.strip()
+        if value:
+            return value
+    return None
+
 def dependencies(binary):
     lines = run(["otool", "-L", str(binary)]).splitlines()[1:]
     result = []
@@ -40,6 +50,9 @@ def dependencies(binary):
         item = line.strip().split(" (compatibility version ", 1)[0]
         if item:
             result.append(item)
+    identity = install_id(binary)
+    if identity is not None:
+        result = [item for item in result if item != identity]
     return result
 
 def rpaths(binary):
@@ -135,6 +148,14 @@ while pending:
     if key in processed:
         continue
     processed.add(key)
+
+    # Give staged dylibs relocatable identities too; the loader does not need
+    # Homebrew install names embedded in the copied library.
+    if staged != main:
+        source_identity = install_id(source)
+        desired_identity = "@loader_path/" + staged.name
+        if source_identity and source_identity != desired_identity:
+            run(["install_name_tool", "-id", desired_identity, str(staged)])
 
     for load_name in dependencies(source):
         if is_system_path(load_name):
