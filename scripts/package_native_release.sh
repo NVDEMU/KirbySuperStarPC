@@ -219,8 +219,8 @@ if [ ! -f "$MARKER" ] || ! cmp -s "$MARKER" "$PROVENANCE"; then
     -cf - . | tar -C "$DATA" -xf -; then
     fail "Could not install the AppImage's files. See $LOG_DIR/launcher.log."
   fi
-  cp "$PROVENANCE" "$MARKER.tmp.$" || fail "Could not write application update marker."
-  mv -f "$MARKER.tmp.$" "$MARKER" || fail "Could not activate application update marker."
+  cp "$PROVENANCE" "$MARKER.tmp.$$" || fail "Could not write application update marker."
+  mv -f "$MARKER.tmp.$$" "$MARKER" || fail "Could not activate application update marker."
   UPDATED=1
 fi
 

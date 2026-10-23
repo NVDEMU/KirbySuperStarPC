@@ -59,7 +59,7 @@ if [ ! -f "$MARKER" ] || ! cmp -s "$MARKER" "$PROVENANCE"; then
     --exclude='/mods/installed/***' \
     "$APP_PACK/" "$DATA/" || fail "Could not install app resources into the writable setup folder."
   cp "$PROVENANCE" "$MARKER.tmp.$$" || fail "Could not write update marker."
-  mv -f "$MARKER.tmp.$" "$MARKER" || fail "Could not activate update marker."
+  mv -f "$MARKER.tmp.$$" "$MARKER" || fail "Could not activate update marker."
   UPDATED=1
 fi
 
