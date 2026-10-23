@@ -28,66 +28,40 @@ if(NOT EXISTS "${SNESRECOMP_ROOT}/runner/runner.cmake")
         "Run: git submodule update --init --recursive")
 endif()
 
-# Experimental Kirby-specific scanline CGRAM replay. The first implementation
-# is now opt-in: the last-known pre-patch captures were visibly nonblack, while
-# fresh builds after the patch produced all-zero frame captures. That correlation
-# is not final proof of causality, so keep the experiment available but disabled
-# until a same-run production-frame comparison verifies it.
-#
-# Important for incremental local rebuilds: when this option is OFF, reverse only
-# this exact patch if it was previously applied to the existing submodule worktree.
-option(KIRBY_ENABLE_CGRAM_RASTER_PATCH
-    "Enable experimental Kirby CGRAM scanline replay (requires frame validation)"
-    OFF)
+# Kirby performs a CGRAM DMA during active display (line 168). The pinned
+# framework's deferred raster renderer must replay those writes at their beam
+# positions instead of using the field's final palette for every scanline.
+# This project-local patch is deliberately tied to the pinned framework tree.
 set(_KIRBY_CGRAM_RASTER_PATCH
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/snesrecomp-cgram-raster.patch")
-if(KIRBY_ENABLE_CGRAM_RASTER_PATCH)
+execute_process(
+    COMMAND git apply --check "${_KIRBY_CGRAM_RASTER_PATCH}"
+    WORKING_DIRECTORY "${SNESRECOMP_ROOT}"
+    RESULT_VARIABLE _kirby_cgram_patch_check
+    OUTPUT_QUIET ERROR_QUIET)
+if("${_kirby_cgram_patch_check}" STREQUAL "0")
     execute_process(
-        COMMAND git apply --check "${_KIRBY_CGRAM_RASTER_PATCH}"
+        COMMAND git apply "${_KIRBY_CGRAM_RASTER_PATCH}"
         WORKING_DIRECTORY "${SNESRECOMP_ROOT}"
-        RESULT_VARIABLE _kirby_cgram_patch_check
-        OUTPUT_QUIET ERROR_QUIET)
-    if("${_kirby_cgram_patch_check}" STREQUAL "0")
-        execute_process(
-            COMMAND git apply "${_KIRBY_CGRAM_RASTER_PATCH}"
-            WORKING_DIRECTORY "${SNESRECOMP_ROOT}"
-            RESULT_VARIABLE _kirby_cgram_patch_apply)
-        if(NOT "${_kirby_cgram_patch_apply}" STREQUAL "0")
-            message(FATAL_ERROR
-                "Failed to apply the Kirby CGRAM raster patch to ${SNESRECOMP_ROOT}.")
-        endif()
-    else()
-        execute_process(
-            COMMAND git apply --reverse --check "${_KIRBY_CGRAM_RASTER_PATCH}"
-            WORKING_DIRECTORY "${SNESRECOMP_ROOT}"
-            RESULT_VARIABLE _kirby_cgram_patch_reverse_check
-            OUTPUT_QUIET ERROR_QUIET)
-        if(NOT "${_kirby_cgram_patch_reverse_check}" STREQUAL "0")
-            message(FATAL_ERROR
-                "The experimental Kirby CGRAM patch does not match the pinned framework. "
-                "Review patches/snesrecomp-cgram-raster.patch.")
-        endif()
+        RESULT_VARIABLE _kirby_cgram_patch_apply)
+    if(NOT "${_kirby_cgram_patch_apply}" STREQUAL "0")
+        message(FATAL_ERROR
+            "Failed to apply the Kirby CGRAM raster patch to ${SNESRECOMP_ROOT}.")
     endif()
 else()
+    # Reconfiguration is common. Accept an already-applied patch, but fail
+    # visibly if the pinned framework source has drifted from its known context.
     execute_process(
         COMMAND git apply --reverse --check "${_KIRBY_CGRAM_RASTER_PATCH}"
         WORKING_DIRECTORY "${SNESRECOMP_ROOT}"
         RESULT_VARIABLE _kirby_cgram_patch_reverse_check
         OUTPUT_QUIET ERROR_QUIET)
-    if("${_kirby_cgram_patch_reverse_check}" STREQUAL "0")
-        execute_process(
-            COMMAND git apply --reverse "${_KIRBY_CGRAM_RASTER_PATCH}"
-            WORKING_DIRECTORY "${SNESRECOMP_ROOT}"
-            RESULT_VARIABLE _kirby_cgram_patch_revert)
-        if(NOT "${_kirby_cgram_patch_revert}" STREQUAL "0")
-            message(FATAL_ERROR
-                "Failed to remove the disabled Kirby CGRAM experiment from ${SNESRECOMP_ROOT}.")
-        endif()
+    if(NOT "${_kirby_cgram_patch_reverse_check}" STREQUAL "0")
+        message(FATAL_ERROR
+            "The Kirby CGRAM raster patch no longer matches the snesrecomp source. "
+            "Review patches/snesrecomp-cgram-raster.patch before updating the framework pin.")
     endif()
-    message(STATUS
-        "Kirby CGRAM raster experiment is OFF; using the framework baseline renderer.")
 endif()
-
 # Mod packages are part of every project, not an option. The launcher's Mods
 # page, the .snesmod loader, the trusted-plugin registry and netplay's mod-set
 # gate all hang off this one switch; a build without it cannot exchange mods
