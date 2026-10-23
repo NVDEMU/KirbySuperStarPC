@@ -13,11 +13,20 @@ _Description from [Wikipedia](https://en.wikipedia.org/wiki/Kirby_Super_Star), C
 
 ## Status
 
-The local build now renders correctly across the tested graphics modes. GitHub
-releases are **setup packs**, not prebuilt game binaries: each pack contains the
-setup host, recompiler and source tree, and the player generates the playable
-game locally from their own verified ROM. ROM images and ROM-derived generated
-C are never included in releases.
+The local manual build renders correctly across the tested graphics modes.
+The standard platform ZIPs remain setup/update packs. The native release assets
+(`.dmg` / `.app`, Windows `.exe`, Linux `.AppImage`) become **playable builds**
+when the repository Actions secret `KIRBY_ROM_URL` is configured to a direct
+download URL for the project's exact, verified ROM. The build downloads that
+ROM only inside the temporary CI runner, verifies it, generates the game code,
+compiles each platform natively, and deletes the ROM before packaging. The
+optional `KIRBY_ROM_TOKEN` secret is sent as a Bearer token for private hosts.
+Without `KIRBY_ROM_URL`, the native assets remain the existing setup launchers.
+
+No ROM image, generated C source files, or machine-specific ROM path is shipped.
+Playable native executables contain the compiled recompiled program and still
+require the player's own verified ROM at runtime. The updater's portable ZIPs
+remain setup packs so existing in-app update behavior is preserved.
 
 ## ROM identity
 

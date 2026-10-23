@@ -44,8 +44,10 @@ if ! file "$EXE" | grep -q 'Mach-O'; then
   file "$EXE" >&2 || true
   exit 1
 fi
-VERSION="$(tr -d '[:space:]' < "$ROOT/VERSION")"
-if [[ ! "$VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}([+-][A-Za-z0-9.-]+)?$ ]]; then VERSION=manual; fi
+BUNDLE_VERSION="$(tr -d '[:space:]' < "$ROOT/VERSION")"
+if [[ ! "$BUNDLE_VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}([+-][A-Za-z0-9.-]+)?$ ]]; then BUNDLE_VERSION=0.0.0; fi
+ASSET_VERSION="${KIRBY_RELEASE_ASSET_VERSION:-manual}"
+PLATFORM="${KIRBY_RELEASE_PLATFORM:-macos}"
 DIST="$ROOT/dist"
 mkdir -p "$DIST"
 WORK="$(mktemp -d "/tmp/kirby-playable-app.XXXXXX")"
@@ -93,8 +95,8 @@ cat > "$CONTENTS/Info.plist" <<PLIST
   <key>CFBundleName</key><string>Kirby Super Star Recomp</string>
   <key>CFBundleDisplayName</key><string>Kirby Super Star Recomp</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>$VERSION</string>
-  <key>CFBundleVersion</key><string>$VERSION</string>
+  <key>CFBundleShortVersionString</key><string>$BUNDLE_VERSION</string>
+  <key>CFBundleVersion</key><string>$BUNDLE_VERSION</string>
   <key>LSMinimumSystemVersion</key><string>11.0</string>
   <key>NSHighResolutionCapable</key><true/>
 </dict>
@@ -110,11 +112,11 @@ DMG_ROOT="$WORK/dmg-root"
 mkdir -p "$DMG_ROOT"
 cp -a "$APP" "$DMG_ROOT/"
 ln -s /Applications "$DMG_ROOT/Applications"
-DMG="$DIST/kirbysuperstar-manual-macos.dmg"
+DMG="$DIST/kirbysuperstar-$ASSET_VERSION-$PLATFORM.dmg"
 sync
 hdiutil create -volname "Kirby Super Star Recomp" -srcfolder "$DMG_ROOT" -ov -format UDZO "$DMG"
 hdiutil verify "$DMG"
-APP_ZIP="$DIST/kirbysuperstar-manual-macos-app.zip"
+APP_ZIP="$DIST/kirbysuperstar-$ASSET_VERSION-$PLATFORM-app.zip"
 /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$APP" "$APP_ZIP"
 unzip -t "$APP_ZIP" >/dev/null
 echo
@@ -122,4 +124,4 @@ echo "Packaged the existing manual build; no C generation or compilation was run
 echo "Playable app: $FINAL_APP"
 echo "DMG:          $DMG"
 echo "App ZIP:      $APP_ZIP"
-echo "This local app package is not the public Nightly setup pack."
+echo "Package version/platform: $ASSET_VERSION / $PLATFORM"
