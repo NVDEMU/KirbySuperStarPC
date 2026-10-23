@@ -335,6 +335,17 @@ def install_setup_pack(archive_path: Path, install_root: Path, staging_parent: P
     return install_root / executable_name
 
 
+def existing_playable_build(install_root: Path) -> Path | None:
+    """Return the local playable binary, if present and runnable, under build/."""
+    executable_name = EXE_STEM + (".exe" if os.name == "nt" else "")
+    candidate = install_root / "build" / executable_name
+    if not candidate.is_file():
+        return None
+    if os.name != "nt" and not os.access(candidate, os.X_OK):
+        return None
+    return candidate
+
+
 def wait_for_parent_exit(pid: int) -> None:
     if pid <= 0:
         return
@@ -511,13 +522,42 @@ def main() -> int:
         )
         wait_for_parent_exit(args.parent_pid)
         executable = install_setup_pack(package_path, install_root, work)
+        existing_game = existing_playable_build(install_root)
+        if existing_game is not None and ask_yes_no(
+            "The update was installed and an existing playable build was detected.\n\n"
+            "Yes: launch that build now and skip regenerating/rebuilding C. It may not "
+            "contain the latest runtime or graphics fixes.\n\n"
+            "No: open Setup & rebuild to use the updated sources. The existing build "
+            "will be kept either way.",
+            title="Kirby Super Star Recomp"
+        ):
+            notify(
+                "Launching the existing playable build. It was not rebuilt and may "
+                "not contain the latest runtime or graphics fixes."
+            )
+            subprocess.Popen([str(existing_game), "--launcher"], cwd=str(install_root),
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL,
+                             creationflags=(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP |
+                                            CREATE_NO_WINDOW) if os.name == "nt" else 0,
+                             start_new_session=(os.name != "nt"))
+            return 0
+
+        # The updater launches the setup host directly (not the .app/AppImage
+        # wrapper), so explicitly keep it in setup mode on an updated source pack.
+        launch_env = os.environ.copy()
+        launch_env["SNESRECOMP_NO_HANDOFF"] = "1"
+        launch_env["SNESRECOMP_FORCE_SETUP"] = "1"
         notify(
             "The setup pack was updated successfully.\n\n"
-            "The updated setup host will open. Choose Generate & rebuild to rebuild "
-            "the playable game from your own ROM; your ROM selection, settings, "
-            "mod preferences, saves, and locally generated files are preserved."
+            "Setup & rebuild will open. Choose Generate & rebuild to use the updated "
+            "runtime with your own verified ROM. Your ROM selection, settings, mod "
+            "preferences, saves, and locally generated files are preserved.\n\n"
+            "If a previous build exists, it remains in build/ and you can choose to "
+            "launch it on a later update prompt."
         )
         subprocess.Popen([str(executable)], cwd=str(install_root),
+                         env=launch_env,
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL,
                          creationflags=(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP |
