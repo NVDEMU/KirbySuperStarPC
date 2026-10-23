@@ -39,13 +39,13 @@ set(_KIRBY_APU_TIMELINE_PATCH
 execute_process(
     COMMAND git apply --check "${_KIRBY_APU_TIMELINE_PATCH}"
     WORKING_DIRECTORY "${SNESRECOMP_ROOT}"
-    RESULT_VARIABLE ${_kirby_apu_patch_check}
+    RESULT_VARIABLE _kirby_apu_patch_check
     OUTPUT_QUIET ERROR_QUIET)
 if("${_kirby_apu_patch_check}" STREQUAL "0")
     execute_process(
         COMMAND git apply "${_KIRBY_APU_TIMELINE_PATCH}"
         WORKING_DIRECTORY "${SNESRECOMP_ROOT}"
-        RESULT_VARIABLE ${_kirby_apu_patch_apply})
+        RESULT_VARIABLE _kirby_apu_patch_apply)
     if(NOT "${_kirby_apu_patch_apply}" STREQUAL "0")
         message(FATAL_ERROR
             "Failed to apply Kirby's SA-1 APU boot-sync fix to ${SNESRECOMP_ROOT}.")
@@ -54,7 +54,7 @@ else()
     execute_process(
         COMMAND git apply --reverse --check "${_KIRBY_APU_TIMELINE_PATCH}"
         WORKING_DIRECTORY "${SNESRECOMP_ROOT}"
-        RESULT_VARIABLE ${_kirby_apu_patch_reverse_check}
+        RESULT_VARIABLE _kirby_apu_patch_reverse_check
         OUTPUT_QUIET ERROR_QUIET)
     if(NOT "${_kirby_apu_patch_reverse_check}" STREQUAL "0")
         message(FATAL_ERROR
