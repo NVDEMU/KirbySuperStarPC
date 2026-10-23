@@ -14,7 +14,10 @@ name: Release
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+    tags:
+      - 'v*'
   workflow_dispatch:
     inputs:
       publish_release:
@@ -43,8 +46,10 @@ on:
         type: boolean
         default: false
 
+# Serialize each ref like the Worms workflow: don't let overlapping pushes
+# race while the Nightly tag and release assets are replaced.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: kirby-release-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
@@ -179,6 +184,24 @@ jobs:
           submodules: recursive
           fetch-depth: 1
 
+      # The framework can copy root rom.cfg beside the executable. This ignored
+      # file stores an absolute path on one machine; never let it reach release CI.
+      - name: Reject local-only ROM data and clear ROM path cache
+        run: |
+          set -euo pipefail
+          if git ls-files --error-unmatch -- rom.cfg >/dev/null 2>&1; then
+            echo "::error::rom.cfg is tracked; it can leak a machine-specific disc path."
+            exit 1
+          fi
+          BAD_ROMS="$(git ls-files -- '*.sfc' '*.smc' '*.srm' '*.fig' || true)"
+          if [[ -n "${BAD_ROMS}" ]]; then
+            echo "::error::ROM or memory-card files are tracked:"
+            printf '%s\n' "${BAD_ROMS}"
+            exit 1
+          fi
+          rm -f rom.cfg build-ci/rom.cfg
+          echo "No tracked ROM images or local ROM-path cache."
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.x'
@@ -258,6 +281,8 @@ jobs:
             -DSNESRECOMP_BUILD_VERSION="${RELEASE_VERSION}" \
             "${EXTRA[@]+"${EXTRA[@]}"}"
           cmake --build build-ci -j"${JOBS}" --target "${EXE_NAME}"
+          # Remove any cache created by a future framework post-build change.
+          rm -f rom.cfg build-ci/rom.cfg
 
       - name: Package setup pack
         run: |
@@ -272,6 +297,50 @@ jobs:
           fi
           bash scripts/package_release.sh build-ci "${{ matrix.artifact }}" "${ARGS[@]+"${ARGS[@]}"}"
           ls -la dist/
+
+      # Verify the actual ZIP as a separate step, like Worms' package checks.
+      - name: Verify setup pack contents
+        env:
+          PLATFORM: ${{ matrix.artifact }}
+        run: |
+          set -euo pipefail
+          ZIP="dist/kirbysuperstar-${RELEASE_VERSION}-${PLATFORM}.zip"
+          python3 - "${ZIP}" <<'PY'
+          from pathlib import PurePosixPath
+          import sys
+          import zipfile
+
+          archive_path = sys.argv[1]
+          with zipfile.ZipFile(archive_path) as zf:
+              names = zf.namelist()
+              paths = [PurePosixPath(name) for name in names]
+              bad = []
+              for name, path in zip(names, paths):
+                  parts = path.parts
+                  if path.name.lower() == "rom.cfg":
+                      bad.append(f"machine-specific ROM path cache: {name}")
+                  if path.suffix.lower() in {".sfc", ".smc", ".srm", ".fig"}:
+                      bad.append(f"ROM or memory-card data: {name}")
+                  if path.suffix.lower() == ".c" and len(parts) >= 3 and parts[-3:-1] == ("src", "gen"):
+                      bad.append(f"generated ROM-derived C: {name}")
+                  if parts[-2:] == ("recomp", "funcs.h"):
+                      bad.append(f"generated ROM-derived header: {name}")
+                  if parts[-2:] == ("mods", "state.toml"):
+                      bad.append(f"per-machine mod state: {name}")
+                  if ".git" in parts:
+                      bad.append(f"Git metadata: {name}")
+              for required in ("CMakeLists.txt", "rom_identity.txt", "README.txt"):
+                  if not any(path.name == required for path in paths):
+                      bad.append(f"missing required setup file: {required}")
+              for required in ("updater.py", "cacert.pem", "BUILD_PROVENANCE.json"):
+                  if not any(path.name == required and path.parent.name == "update" for path in paths):
+                      bad.append(f"missing updater runtime file: update/{required}")
+              if bad:
+                  for item in bad:
+                      print(f"::error::{item}", file=sys.stderr)
+                  raise SystemExit("Refusing to publish this setup pack.")
+              print(f"Verified {archive_path}: no rom.cfg, ROM images, generated code, or per-machine state.")
+          PY
 
       - uses: actions/upload-artifact@v4
         with:
