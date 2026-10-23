@@ -379,10 +379,6 @@ jobs:
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
-          path: dist/${{ env.ZIP_PREFIX }}-*-${{ matrix.artifact }}.zip
-          if-no-files-found: error
-          retention-days: 7
-          compression-level: 0
 
   release:
     name: Tag and publish
