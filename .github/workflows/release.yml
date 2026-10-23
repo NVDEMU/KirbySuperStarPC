@@ -377,7 +377,7 @@ jobs:
             -DSNESRECOMP_SETUP_HOST=OFF \
             -DSNESRECOMP_ENABLE_TRACE=OFF \
             -DSNESRECOMP_BUILD_VERSION="${RELEASE_VERSION}" \
-"${EXTRA[@]}"
+            "${EXTRA[@]}"
           cmake --build build-playable -j"$JOBS" --target "${EXE_NAME}"
           rm -f "$ROM"
           bash scripts/package_playable_release.sh build-playable "${{ matrix.artifact }}" "${RELEASE_VERSION}"
