@@ -50,6 +50,14 @@ fi
 # The ROM hint and digests come from rom_identity.txt -- the same file the
 # build compiles in and tools/regen.sh verifies against -- so a revision bump
 # is one edit. stage_setup_host.sh already needs python3, so this does too.
+# rom.cfg is intentionally local-only: it stores an absolute path on the
+# developer's machine. Never commit it or include it in a release setup pack.
+if git ls-files --error-unmatch -- rom.cfg >/dev/null 2>&1; then
+  echo "error: rom.cfg is tracked by Git; it can expose a machine-specific ROM path." >&2
+  echo "  Remove it from the index with: git rm --cached rom.cfg" >&2
+  exit 1
+fi
+
 IDENTITY_TOOL="snesrecomp/tools/rom_identity.py"
 ROM_FILE="$(python3 "$IDENTITY_TOOL" rom_identity.txt --get rom_file)"
 ROM_SHA256="$(python3 "$IDENTITY_TOOL" rom_identity.txt --get expected_sha256)"
@@ -98,3 +106,47 @@ bash "$IMPL" \
   --rom-sha256 "$ROM_SHA256" \
   --rom-crc32 "$ROM_CRC32" \
   "${EXTRA[@]+"${EXTRA[@]}"}"
+
+ZIP="$ROOT/dist/kirbysuperstar-${PACK_VERSION}-${PLATFORM}.zip"
+if [[ ! -f "$ZIP" ]]; then
+  echo "error: expected setup-pack archive was not created: $ZIP" >&2
+  ls -la "$ROOT/dist" >&2 || true
+  exit 1
+fi
+
+# Inspect the real archive, not just the source tree. rom.cfg contains the
+# absolute disc path; a regression must fail the release before publication.
+python3 - "$ZIP" <<'PY'
+from pathlib import Path, PurePosixPath
+import sys
+import zipfile
+
+archive_path = Path(sys.argv[1])
+with zipfile.ZipFile(archive_path) as archive:
+    names = archive.namelist()
+    paths = [PurePosixPath(name) for name in names]
+    errors = []
+    for original, path in zip(names, paths):
+        parts = path.parts
+        if path.name.lower() == "rom.cfg":
+            errors.append(f"machine-specific ROM path cache: {original}")
+        if path.suffix.lower() in {".sfc", ".smc", ".srm", ".fig"}:
+            errors.append(f"ROM or memory-card file: {original}")
+        if len(parts) >= 3 and parts[-3:-1] == ("src", "gen") and path.suffix.lower() == ".c":
+            errors.append(f"generated ROM-derived C: {original}")
+        if parts[-2:] == ("recomp", "funcs.h"):
+            errors.append(f"generated ROM-derived header: {original}")
+        if parts[-2:] == ("mods", "state.toml"):
+            errors.append(f"per-machine mod state: {original}")
+        if ".git" in parts:
+            errors.append(f"Git metadata: {original}")
+    if not any(path.name == "updater.py" and path.parent.name == "update" for path in paths):
+        errors.append("missing update/updater.py")
+    if not any(path.name == "BUILD_PROVENANCE.json" and path.parent.name == "update" for path in paths):
+        errors.append("missing update/BUILD_PROVENANCE.json")
+    if errors:
+        for error in errors:
+            print(f"::error::{error}", file=sys.stderr)
+        raise SystemExit("Refusing to publish an unsafe Kirby setup pack.")
+    print(f"Verified {archive_path.name}: no local ROM path cache, ROM data, generated C, or per-machine mod state.")
+PY
