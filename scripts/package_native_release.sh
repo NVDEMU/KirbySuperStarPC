@@ -235,7 +235,30 @@ fi
 export LD_LIBRARY_PATH="$APPDIR/usr/lib:$APPDIR/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 cd "$DATA" || fail "Could not enter the writable setup folder."
 if [ "$UPDATED" -eq 1 ]; then
-  # A refreshed source pack must not jump into the pre-update build/.
+  EXISTING_GAME="$DATA/build/KirbySuperStarSNESRecomp"
+  if [ -x "$EXISTING_GAME" ]; then
+    echo "Detected an existing playable build: $EXISTING_GAME"
+    CHOOSE_EXISTING=0
+    PROMPT_TEXT="An existing Kirby Super Star build was found. Launch it now and skip regenerating/rebuilding C? It may not include the latest runtime or graphics fixes. Choose Setup & rebuild to use the updated sources."
+    if command -v zenity >/dev/null 2>&1; then
+      if zenity --question --title="Kirby Super Star Recomp" --text="$PROMPT_TEXT" --ok-label="Launch existing build" --cancel-label="Setup & rebuild"; then
+        CHOOSE_EXISTING=1
+      fi
+    elif command -v kdialog >/dev/null 2>&1; then
+      if kdialog --yesno "$PROMPT_TEXT" --yes-label "Launch existing build" --no-label "Setup & rebuild" --title "Kirby Super Star Recomp"; then
+        CHOOSE_EXISTING=1
+      fi
+    else
+      echo "No graphical prompt tool available; continuing to Setup & rebuild."
+    fi
+    if [ "$CHOOSE_EXISTING" -eq 1 ]; then
+      echo "Player chose the existing build; skipping source generation and C rebuild."
+      exec "$EXISTING_GAME" --launcher "$@"
+    fi
+  fi
+
+  # A refreshed source pack must not jump into the pre-update build unless the
+  # player explicitly selected that option above.
   echo "Updated source pack detected; keeping the setup UI open for Generate & rebuild."
   export SNESRECOMP_NO_HANDOFF=1
   export SNESRECOMP_FORCE_SETUP=1

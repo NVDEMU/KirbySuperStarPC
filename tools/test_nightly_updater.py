@@ -86,6 +86,12 @@ class NightlyUpdaterTests(unittest.TestCase):
             (installed / "recomp" / "funcs.h").write_text("local generated funcs", encoding="utf-8")
             (installed / "saves").mkdir()
             (installed / "saves" / "slot.srm").write_bytes(b"save-data")
+            (installed / "build").mkdir()
+            exe_name = "KirbySuperStarSNESRecomp" + (".exe" if os.name == "nt" else "")
+            old_exe = installed / "build" / exe_name
+            old_exe.write_text("previous playable build", encoding="utf-8")
+            if os.name != "nt":
+                old_exe.chmod(0o755)
 
             archive_path = root / "nightly.zip"
             with zipfile.ZipFile(archive_path, "w") as archive:
@@ -109,6 +115,25 @@ class NightlyUpdaterTests(unittest.TestCase):
             self.assertEqual((installed / "src" / "gen" / "game.c").read_text(), "local ROM-derived output")
             self.assertEqual((installed / "recomp" / "funcs.h").read_text(), "local generated funcs")
             self.assertEqual((installed / "saves" / "slot.srm").read_bytes(), b"save-data")
+            self.assertEqual(old_exe.read_text(encoding="utf-8"), "previous playable build")
+
+    def test_existing_playable_build_detection_requires_a_runnable_build(self):
+        with tempfile.TemporaryDirectory() as temp:
+            install_root = Path(temp)
+            self.assertIsNone(UPDATER.existing_playable_build(install_root))
+
+            build_dir = install_root / "build"
+            build_dir.mkdir()
+            exe_name = "KirbySuperStarSNESRecomp" + (".exe" if os.name == "nt" else "")
+            candidate = build_dir / exe_name
+            candidate.write_text("playable build", encoding="utf-8")
+            if os.name != "nt":
+                candidate.chmod(0o755)
+            self.assertEqual(UPDATER.existing_playable_build(install_root), candidate)
+
+            if os.name != "nt":
+                candidate.chmod(0o644)
+                self.assertIsNone(UPDATER.existing_playable_build(install_root))
 
     def test_update_provenance_is_read_from_runtime_directory(self):
         with tempfile.TemporaryDirectory() as temp:

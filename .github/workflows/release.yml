@@ -212,7 +212,7 @@ jobs:
           set -euo pipefail
           python -m py_compile tools/in_app_updater.py tools/test_nightly_updater.py tools/apply_kirby_updater_patch.py
           python tools/test_nightly_updater.py
-          bash -n scripts/package_release.sh scripts/package_native_release.sh
+          bash -n scripts/package_release.sh scripts/package_native_release.sh scripts/macos_app_launcher.sh
 
       - name: Record framework pins
         run: bash snesrecomp/tools/ci/record_pins.sh
