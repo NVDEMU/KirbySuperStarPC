@@ -38,7 +38,8 @@ function(kirby_apply_framework_patch patch_name description)
         COMMAND git apply --check "${_kirby_patch}"
         WORKING_DIRECTORY "${SNESRECOMP_ROOT}"
         RESULT_VARIABLE _kirby_patch_check
-        OUTPUT_QUIET ERROR_QUIET)
+        OUTPUT_VARIABLE _kirby_patch_check_out
+        ERROR_VARIABLE _kirby_patch_check_err)
     if("${_kirby_patch_check}" STREQUAL "0")
         execute_process(
             COMMAND git apply "${_kirby_patch}"
@@ -52,11 +53,14 @@ function(kirby_apply_framework_patch patch_name description)
             COMMAND git apply --reverse --check "${_kirby_patch}"
             WORKING_DIRECTORY "${SNESRECOMP_ROOT}"
             RESULT_VARIABLE _kirby_patch_reverse_check
-            OUTPUT_QUIET ERROR_QUIET)
+            OUTPUT_VARIABLE _kirby_patch_reverse_out
+            ERROR_VARIABLE _kirby_patch_reverse_err)
         if(NOT "${_kirby_patch_reverse_check}" STREQUAL "0")
             message(FATAL_ERROR
                 "${description} does not match this snesrecomp checkout. "
-                "Review patches/${patch_name}.")
+                "Review patches/${patch_name}.\n"
+                "apply --check: ${_kirby_patch_check}; ${_kirby_patch_check_err}\n"
+                "reverse --check: ${_kirby_patch_reverse_check}; ${_kirby_patch_reverse_err}")
         endif()
     endif()
 endfunction()
