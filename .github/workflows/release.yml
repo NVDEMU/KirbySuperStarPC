@@ -378,6 +378,84 @@ jobs:
             -DSNESRECOMP_BUILD_VERSION="${RELEASE_VERSION}" \
             "${EXTRA[@]}"
           cmake --build build-playable -j"$JOBS" --target "${EXE_NAME}"
+
+          # A compiler success is not evidence that the PPU produces a visible
+          # picture. Smoke-test the actual ROM-derived binary before packaging
+          # it, using the framework's headless SDL + screenshot path.
+          SMOKE="$RUNNER_TEMP/kirby-smoke-test"
+          mkdir -p "$SMOKE"
+          cat >"$SMOKE/config.ini" <<'SMOKE_CONFIG'
+          [Graphics]
+          OutputMethod = SDL-Software
+          NewRenderer = 1
+          WindowScale = 1
+
+          [General]
+          DisableFrameDelay = 1
+          Autosave = 0
+          SkipLauncher = 1
+
+          [Sound]
+          EnableAudio = 0
+          SMOKE_CONFIG
+          GAME="$GITHUB_WORKSPACE/build-playable/${EXE_NAME}"
+          if [[ "${{ matrix.artifact }}" == "windows-x64" ]]; then GAME="$GAME.exe"; fi
+          set +e
+          (
+            cd "$SMOKE"
+            SDL_VIDEODRIVER=dummy \
+            SDL_AUDIODRIVER=dummy \
+            SNESRECOMP_RUN_FRAMES=3600 \
+            SNESRECOMP_SCREENSHOT="$SMOKE/frame.ppm" \
+            SNESRECOMP_SCREENSHOT_FRAME=3600 \
+              "$GAME" --no-launcher --rom "$ROM" --config "$SMOKE/config.ini"
+          ) >"$SMOKE/game.log" 2>&1
+          GAME_RC=$?
+          set -e
+          if [[ "$GAME_RC" -ne 0 ]]; then
+            cat "$SMOKE/game.log"
+            echo "::error::Playable binary exited with code $GAME_RC during the headless render smoke test."
+            exit "$GAME_RC"
+          fi
+          if [[ ! -s "$SMOKE/frame.ppm" ]]; then
+            cat "$SMOKE/game.log"
+            echo "::error::Playable binary did not produce its requested rendered-frame screenshot."
+            exit 1
+          fi
+          python3 - "$SMOKE/frame.ppm" <<'PY_SMOKE'
+          from pathlib import Path
+          import re
+          import sys
+
+          path = Path(sys.argv[1])
+          raw = path.read_bytes()
+          header, sep, pixels = raw.partition(b"\\n255\\n")
+          if not sep or not header.startswith(b"P6\\n"):
+              raise SystemExit("::error::Screenshot is not a valid binary PPM.")
+          dimensions = re.findall(rb"\\d+", header[2:])
+          if len(dimensions) != 2:
+              raise SystemExit("::error::Screenshot has an invalid PPM dimension header.")
+          width, height = map(int, dimensions)
+          if width < 256 or height < 224 or len(pixels) != width * height * 3:
+              raise SystemExit(
+                  f"::error::Screenshot data size is invalid: {width}x{height}, "
+                  f"{len(pixels)} pixel bytes."
+              )
+          triples = zip(pixels[0::3], pixels[1::3], pixels[2::3])
+          nonblack = 0
+          colors = set()
+          for r, g, b in triples:
+              colors.add((r, g, b))
+              nonblack += (r > 8 or g > 8 or b > 8)
+          ratio = nonblack / (width * height)
+          print(f"Headless render: {width}x{height}; nonblack pixels={nonblack} ({ratio:.1%}); distinct colors={len(colors)}")
+          if nonblack < 1000 or ratio < 0.01 or len(colors) < 8:
+              raise SystemExit(
+                  "::error::Black/near-empty rendered frame detected; refusing to package or publish this build."
+              )
+          print("Headless render smoke test passed: captured a nonblack, nontrivial frame.")
+          PY_SMOKE
+
           rm -f "$ROM"
           bash scripts/package_playable_release.sh build-playable "${{ matrix.artifact }}" "${RELEASE_VERSION}"
           ls -lh dist/
