@@ -405,11 +405,11 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          find artifacts -type f \\( \
+          find artifacts -type f \( \
             -name 'kirbysuperstar-*.zip' -o \
             -name 'kirbysuperstar-*.exe' -o \
             -name 'kirbysuperstar-*.dmg' -o \
-            -name 'kirbysuperstar-*.AppImage' \\) -exec cp -v {} dist/ \\;
+            -name 'kirbysuperstar-*.AppImage' \) -exec cp -v {} dist/ \;
 
           # The updater consumes these exact four portable setup-pack names.
           for platform in linux-x64 windows-x64 macos-arm64 macos-x64; do
