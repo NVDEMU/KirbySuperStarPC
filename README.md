@@ -13,10 +13,23 @@ _Description from [Wikipedia](https://en.wikipedia.org/wiki/Kirby_Super_Star), C
 
 ## Status
 
-Scaffolded on 2026-10-21 — **not yet a working port.** The layout, build,
-regeneration pipeline, CI, and packaging are wired up; the game does not run
-until the host work in `src/game_rtl.c` is done. See
-[Porting from here](#porting-from-here).
+The local manual build renders correctly across the tested graphics modes.
+The standard platform ZIPs remain setup/update packs. The native release assets
+(`.dmg` / `.app`, Windows `.exe`, Linux `.AppImage`) become **playable builds**
+when the repository Actions secret `KIRBY_ROM_URL` contains a MEGA public file
+share link for the project's exact, verified ROM. The build uses MEGA's share
+API (not a normal HTTP fetch), verifies the downloaded ROM, generates the game
+code, compiles each platform natively, and removes the temporary ROM before
+packaging.
+Without `KIRBY_ROM_URL`, the native assets remain the existing setup launchers.
+After adding or changing that Actions secret, push a commit to `main` or rerun
+the **Release** workflow from the Actions tab so Nightly is rebuilt with the new
+secret values.
+
+No ROM image, generated C source files, or machine-specific ROM path is shipped.
+Playable native executables contain the compiled recompiled program and still
+require the player's own verified ROM at runtime. The updater's portable ZIPs
+remain setup packs so existing in-app update behavior is preserved.
 
 ## ROM identity
 
@@ -70,6 +83,30 @@ Either way the ROM is checked against the digests above before anything boots
 — a dump that could not have produced this build is refused at the door rather
 than mis-executing ten frames in.
 
+## Package the manual build as a macOS app
+
+When the **manual build on your Mac has already been confirmed to render
+correctly**, package that exact executable directly as a Finder-launchable
+app, DMG, and app ZIP:
+
+```sh
+bash scripts/package_playable_macos_app.sh build
+```
+
+This is a packaging-only step: it does **not** rerun ROM-to-C generation or
+compile C. It checks that `build/KirbySuperStarSNESRecomp` is a playable
+macOS executable, then wraps its built runtime assets in a real `.app`
+and `.dmg`. The app launches the already-built game directly and does not
+show the setup-host's **Generate & rebuild** first-run screen. Files are
+written to `dist/`.
+
+The app stores writable runtime files separately and attempts to carry over
+the ROM path, settings, saves, and installed mods from the previous setup-pack
+data folder. It does not bundle the ROM, local `rom.cfg`, save files, or
+installed mod state. **This manual app is built from one local ROM-derived
+executable**; it is not an artifact the public Nightly workflow can recreate
+without that local manual build. The official Nightly remains a setup pack.
+
 ## Layout
 
 | Path | What lives there |
@@ -102,6 +139,20 @@ The scaffold stops where the game-specific work starts. In rough order:
    diverges, and they are cheap to fix early.
 4. **Never synthesise a result** to get past uncovered code, and never edit
    `src/gen/` by hand. Fix the config or the framework and regenerate.
+
+## Nightly updates
+
+Official Windows and macOS setup packs include **Check for Updates** in the
+launcher. It checks the `NVDEMU/KirbySuperStarPC` `Nightly` release, verifies
+the downloaded ZIP against its published SHA-256 checksum, and waits for the
+running game to close before installation. Your ROM selection, settings, mod
+state, saves, and locally generated ROM-derived files are preserved.
+
+Because each release is a setup pack, the updater reopens the setup host after
+installing. Choose **Generate & rebuild** to rebuild the playable executable
+from your own ROM and the updated source. Linux users can download the latest
+`linux-x64` setup ZIP from the Nightly GitHub Release and unpack it over their
+existing setup-pack folder; Linux in-app updating is not enabled.
 
 ## Multiplayer
 

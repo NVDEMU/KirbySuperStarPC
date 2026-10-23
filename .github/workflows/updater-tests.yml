@@ -1,0 +1,51 @@
+name: Updater safety checks
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - fix/cgram-scanline-raster-journal
+
+permissions:
+  contents: read
+
+jobs:
+  updater-safety:
+    name: Updater safety and launcher patch
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout project and pinned submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Compile updater and tests
+        run: |
+          python -m py_compile \
+            tools/in_app_updater.py \
+            tools/apply_kirby_updater_patch.py \
+            tools/test_nightly_updater.py
+
+      - name: Test updater safety rules
+        run: python tools/test_nightly_updater.py
+
+      - name: Check release packager shell syntax
+        run: bash -n scripts/package_release.sh scripts/package_native_release.sh scripts/macos_app_launcher.sh scripts/package_playable_macos_app.sh scripts/package_playable_release.sh scripts/bundle_macos_dylibs.sh
+        shell: bash
+
+      - name: Check MEGA downloader syntax
+        run: node --check scripts/download_mega_rom.cjs
+
+      - name: Parse release workflow YAML
+        run: ruby -e 'require "yaml"; YAML.load_file(".github/workflows/release.yml"); puts "release workflow YAML parsed"'
+
+      - name: Apply launcher updater patch
+        run: |
+          python tools/apply_kirby_updater_patch.py --ui-root recomp-ui
+          python tools/apply_kirby_updater_patch.py --ui-root recomp-ui --check

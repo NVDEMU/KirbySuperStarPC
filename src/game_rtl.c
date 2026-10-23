@@ -34,11 +34,134 @@
 
 #include "game_rtl.h"
 
+#include <stdio.h>
+#include <stdlib.h>
+
 #include "beam_frame_driver.h"
+#include "cpu_state.h"
+#include "snes/interp_bridge.h"
+#include "snes/snes.h"
+#include "snes/spc.h"
+
+extern CpuState g_cpu;
+extern Snes *g_snes;
+
+/* CI-only diagnostics for the current black-frame regression. These hooks are
+ * dormant unless the release smoke test explicitly enables them. */
+static unsigned s_kirby_diagnostic_frame;
+
+static uint16_t kirby_diag_read16(uint32_t address)
+{
+    return (uint16_t)(snes_read(g_snes, address) |
+                      ((uint16_t)snes_read(g_snes, address + 1) << 8));
+}
+
+static void kirby_dump_wait_loop(void)
+{
+    if (!g_snes)
+        return;
+
+    /* Decode the observed short wait-loop without logging raw ROM bytes into
+     * public CI logs. The operands say which hardware/register it polls. */
+    const uint32_t pc = 0x00D5E9;
+    const uint16_t stz = kirby_diag_read16(pc + 1);
+    const uint8_t lda1 = snes_read(g_snes, pc + 4);
+    const uint16_t sta1 = kirby_diag_read16(pc + 6);
+    const uint8_t lda2 = snes_read(g_snes, pc + 9);
+    const uint16_t sta2 = kirby_diag_read16(pc + 11);
+    const uint16_t sta3 = kirby_diag_read16(pc + 15);
+    const uint16_t cmp = kirby_diag_read16(pc + 18);
+    const int8_t branch = (int8_t)snes_read(g_snes, pc + 21);
+
+    fprintf(stderr,
+            "[kirby_boot] loop $00D5E9: STZ $%04X; LDA #$%02X; STA $%04X; "
+            "LDA #$%02X; STA $%04X; DEC A; STA $%04X; CMP $%04X; "
+            "BNE %+d\n",
+            stz, lda1, sta1, lda2, sta2, sta3, cmp, branch);
+    fprintf(stderr,
+            "[kirby_boot] PPU at wait: INIDISP=%02X BGMODE=%02X "
+            "TM=%02X TS=%02X VRAM0=%04X CGRAM0=%04X "
+            "h=%u v=%u in_vblank=%u nmi=%u\n",
+            (unsigned)g_snes->ppu->inidisp,
+            (unsigned)g_snes->ppu->bgmode,
+            (unsigned)g_snes->ppu->screenEnabled[0],
+            (unsigned)g_snes->ppu->screenEnabled[1],
+            (unsigned)g_snes->ppu->vram[0],
+            (unsigned)g_snes->ppu->cgram[0],
+            (unsigned)g_snes->hPos, (unsigned)g_snes->vPos,
+            (unsigned)g_snes->inVblank, (unsigned)g_snes->nmiEnabled);
+    fprintf(stderr,
+            "[kirby_boot] APU wait: SPC_PC=%04X stopped=%u IPL_ROM=%u "
+            "IN=%02X,%02X,%02X,%02X OUT=%02X,%02X,%02X,%02X "
+            "apu_cycles=%llu port_clock=%llu catchup=%.1f cpu_left=%u\n",
+            g_snes->apu && g_snes->apu->spc ? (unsigned)g_snes->apu->spc->pc : 0u,
+            g_snes->apu && g_snes->apu->spc ? (unsigned)g_snes->apu->spc->stopped : 0u,
+            g_snes->apu ? (unsigned)g_snes->apu->romReadable : 0u,
+            g_snes->apu ? (unsigned)g_snes->apu->inPorts[0] : 0u,
+            g_snes->apu ? (unsigned)g_snes->apu->inPorts[1] : 0u,
+            g_snes->apu ? (unsigned)g_snes->apu->inPorts[2] : 0u,
+            g_snes->apu ? (unsigned)g_snes->apu->inPorts[3] : 0u,
+            g_snes->apu ? (unsigned)g_snes->apu->outPorts[0] : 0u,
+            g_snes->apu ? (unsigned)g_snes->apu->outPorts[1] : 0u,
+            g_snes->apu ? (unsigned)g_snes->apu->outPorts[2] : 0u,
+            g_snes->apu ? (unsigned)g_snes->apu->outPorts[3] : 0u,
+            (unsigned long long)(g_snes->apu ? g_snes->apu->cycles : 0u),
+            (unsigned long long)(g_snes->apu ? g_snes->apu->portClock : 0u),
+            g_snes->apu ? g_snes->apuCatchupCycles : 0.0,
+            g_snes->apu ? (unsigned)g_snes->apu->cpuCyclesLeft : 0u);
+}
+
+static void kirby_boot_trace(unsigned frame, const char *phase)
+{
+    if (getenv("SNESRECOMP_KIRBY_BOOT_TRACE") == NULL || (frame > 12 && frame != 3600))
+        return;
+
+    fprintf(stderr,
+            "[kirby_boot] %s frame=%u resume_pc=%06X "
+            "A=%04X X=%04X Y=%04X S=%04X D=%04X "
+            "DB=%02X PB=%02X P=%02X master=%llu\n",
+            phase, frame, (unsigned)interp_bridge_lle_resume_pc(),
+            (unsigned)g_cpu.A, (unsigned)g_cpu.X, (unsigned)g_cpu.Y,
+            (unsigned)g_cpu.S, (unsigned)g_cpu.D, (unsigned)g_cpu.DB,
+            (unsigned)g_cpu.PB, (unsigned)g_cpu.P,
+            (unsigned long long)g_cpu.master_cycles);
+
+    /* A valid Nintendo logo can be mostly black, so the release smoke test
+     * also inspects CPU/APU/PPU progress at the end of its 3,600-frame run. */
+    if (phase[0] == 'a' && frame == 3600 && g_snes) {
+        fprintf(stderr,
+                "[kirby_boot] final frame=%u resume_pc=%06X "
+                "INIDISP=%02X TM=%02X TS=%02X SPC_PC=%04X IPL_ROM=%u "
+                "portTimeValid=%u OUT=%02X,%02X,%02X,%02X\n",
+                frame, (unsigned)interp_bridge_lle_resume_pc(),
+                (unsigned)(g_snes->ppu ? g_snes->ppu->inidisp : 0),
+                (unsigned)(g_snes->ppu ? g_snes->ppu->screenEnabled[0] : 0),
+                (unsigned)(g_snes->ppu ? g_snes->ppu->screenEnabled[1] : 0),
+                (unsigned)(g_snes->apu && g_snes->apu->spc ? g_snes->apu->spc->pc : 0),
+                (unsigned)(g_snes->apu ? g_snes->apu->romReadable : 0),
+                (unsigned)(g_snes->apu ? g_snes->apu->portTimeValid : 0),
+                (unsigned)(g_snes->apu ? g_snes->apu->outPorts[0] : 0),
+                (unsigned)(g_snes->apu ? g_snes->apu->outPorts[1] : 0),
+                (unsigned)(g_snes->apu ? g_snes->apu->outPorts[2] : 0),
+                (unsigned)(g_snes->apu ? g_snes->apu->outPorts[3] : 0));
+    }
+
+    if (phase[0] == 'a' && frame == 1)
+        kirby_dump_wait_loop();
+}
 
 void GameRunOneFrame(void)
 {
+    const unsigned frame = ++s_kirby_diagnostic_frame;
+    kirby_boot_trace(frame, "before");
     snes_beam_frame_driver_run_frame();
+    kirby_boot_trace(frame, "after");
+
+    if (getenv("SNESRECOMP_KIRBY_BOOT_TRACE") != NULL &&
+        (frame == 1 || frame == 12)) {
+        fprintf(stderr, "[kirby_boot] interpreter snapshot after frame %u\n", frame);
+        interp_bridge_dump_recent(128, stderr);
+    }
 }
 
 void GameDrawPpuFrame(void)

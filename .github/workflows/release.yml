@@ -1,39 +1,23 @@
-# Build the Kirby Super Star SETUP PACK for Linux, Windows, macOS
-# arm64 and macOS Intel, tag the commit, and publish the four zips as a
-# GitHub Release.
+# Build Kirby Super Star setup packs for four platforms.
 #
-# HUMAN-TRIGGERED ONLY. There is no push, pull_request or schedule trigger and
-# there must never be one: a run is a release decision, made by a person on
-# the Actions page. Releases across the port set are driven from the studio
-# bulk tool, and a per-push run would compete with it for minutes and for the
-# meaning of "did CI pass".
+# Manual dispatch makes versioned vX.Y.Z releases. Commits to main publish the
+# stable-name Nightly release used by the in-app updater. A Nightly contains a
+# setup host plus source and portable build tools; players generate the game
+# locally from their own ROM. No ROM or generated ROM-derived C is distributed.
 #
-# WHAT A RUN DOES, with the defaults:
-#   1. Picks the next version: the latest v* tag with its patch number bumped
-#      (or VERSION when there is no tag yet, or whatever `version` says).
-#   2. Builds the setup host for all four platforms with that version as the
-#      lobby pin, and packages it.
-#   3. Tags the commit the run was started from as vX.Y.Z and publishes a
-#      public GitHub Release with the four zips. Uncheck publish_release for a
-#      dry run that only uploads workflow artifacts.
+# Nightly assets are overwritten in place. Their SHA-256 files and
+# nightly-manifest.json are consumed by tools/in_app_updater.py.
 #
-# WHAT THIS BUILDS. Not the game. src/gen/*.c is recompiler output derived
-# from ROM bytes: never committed, never in CI, never in a zip. What CI can
-# honestly produce is the SETUP HOST -- the same executable built with
-# -DSNESRECOMP_SETUP_HOST=ON, i.e. without recompiled code -- packaged with
-# the recompiler and this source tree. On the player's machine the launcher
-# takes their own ROM, generates, rebuilds, and relaunches into the real game.
-#
-# THE TOOLCHAIN. Each pack is built with the retcomm-toolchains cmake-clang-v1
-# pack, because that is what the player's own rebuild uses: if it cannot build
-# this game, CI is where that must fail. By default the pack is embedded in
-# the zip (embed_toolchain) so first run downloads nothing; turn it off for a
-# lean zip that fetches the pack on demand (Linux pack ~800 MB, Windows
-# ~200 MB, macOS ~90 MB).
+# The toolchain is embedded by default so the first run needs no tool download.
 
 name: Release
 
 on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
   workflow_dispatch:
     inputs:
       publish_release:
@@ -62,8 +46,11 @@ on:
         type: boolean
         default: false
 
+# Serialize each ref like the Worms workflow: don't let overlapping pushes
+# race while the Nightly tag and release assets are replaced.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: kirby-release-${{ github.event_name }}-${{ github.ref }}
+  # Nightly is a rolling channel: only the newest main commit should publish.
   cancel-in-progress: true
 
 permissions:
@@ -105,6 +92,15 @@ jobs:
           IN_PUBLISH: ${{ inputs.publish_release }}
         run: |
           set -euo pipefail
+          # Pushes to main publish the rolling Nightly. Workflow dispatches
+          # remain deliberate, versioned releases or dry runs.
+          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF_TYPE}" == "branch" ]]; then
+            echo "version=Nightly" >>"$GITHUB_OUTPUT"
+            echo "tag=Nightly" >>"$GITHUB_OUTPUT"
+            echo "publish=true" >>"$GITHUB_OUTPUT"
+            echo "publishing Nightly from ${GITHUB_SHA::12}"
+            exit 0
+          fi
           PUBLISH=true
           [[ "${IN_PUBLISH}" == "false" ]] && PUBLISH=false
           FILE_VER="$(tr -d '[:space:]' < VERSION)"
@@ -181,6 +177,8 @@ jobs:
       # The lobby pin compiled into the binary and written into the pack's
       # VERSION, so the tag, the binary and the player's own rebuild agree.
       RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+      # Optional private source for the pinned ROM. The URL/token stay in Actions secrets.
+      KIRBY_ROM_URL: ${{ secrets.KIRBY_ROM_URL }}
 
     steps:
       - name: Checkout
@@ -188,6 +186,35 @@ jobs:
         with:
           submodules: recursive
           fetch-depth: 1
+
+      # The framework can copy root rom.cfg beside the executable. This ignored
+      # file stores an absolute path on one machine; never let it reach release CI.
+      - name: Reject local-only ROM data and clear ROM path cache
+        run: |
+          set -euo pipefail
+          if git ls-files --error-unmatch -- rom.cfg >/dev/null 2>&1; then
+            echo "::error::rom.cfg is tracked; it can leak a machine-specific disc path."
+            exit 1
+          fi
+          BAD_ROMS="$(git ls-files -- '*.sfc' '*.smc' '*.srm' '*.fig' || true)"
+          if [[ -n "${BAD_ROMS}" ]]; then
+            echo "::error::ROM or memory-card files are tracked:"
+            printf '%s\n' "${BAD_ROMS}"
+            exit 1
+          fi
+          rm -f rom.cfg build-ci/rom.cfg
+          echo "No tracked ROM images or local ROM-path cache."
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Test updater safety
+        run: |
+          set -euo pipefail
+          python -m py_compile tools/in_app_updater.py tools/test_nightly_updater.py tools/apply_kirby_updater_patch.py
+          python tools/test_nightly_updater.py
+          bash -n scripts/package_release.sh scripts/package_native_release.sh scripts/macos_app_launcher.sh scripts/package_playable_macos_app.sh scripts/package_playable_release.sh
 
       - name: Record framework pins
         run: bash snesrecomp/tools/ci/record_pins.sh
@@ -257,6 +284,8 @@ jobs:
             -DSNESRECOMP_BUILD_VERSION="${RELEASE_VERSION}" \
             "${EXTRA[@]+"${EXTRA[@]}"}"
           cmake --build build-ci -j"${JOBS}" --target "${EXE_NAME}"
+          # Remove any cache created by a future framework post-build change.
+          rm -f rom.cfg build-ci/rom.cfg
 
       - name: Package setup pack
         run: |
@@ -272,12 +301,290 @@ jobs:
           bash scripts/package_release.sh build-ci "${{ matrix.artifact }}" "${ARGS[@]+"${ARGS[@]}"}"
           ls -la dist/
 
+      # Verify the actual ZIP as a separate step, like Worms' package checks.
+      - name: Verify setup pack contents
+        env:
+          PLATFORM: ${{ matrix.artifact }}
+        run: |
+          set -euo pipefail
+          ZIP="dist/kirbysuperstar-${RELEASE_VERSION}-${PLATFORM}.zip"
+          python3 - "${ZIP}" <<'PY'
+          from pathlib import PurePosixPath
+          import sys
+          import zipfile
+
+          archive_path = sys.argv[1]
+          with zipfile.ZipFile(archive_path) as zf:
+              names = zf.namelist()
+              paths = [PurePosixPath(name) for name in names]
+              bad = []
+              for name, path in zip(names, paths):
+                  parts = path.parts
+                  if path.name.lower() == "rom.cfg":
+                      bad.append(f"machine-specific ROM path cache: {name}")
+                  if path.suffix.lower() in {".sfc", ".smc", ".srm", ".fig"}:
+                      bad.append(f"ROM or memory-card data: {name}")
+                  if path.suffix.lower() == ".c" and len(parts) >= 3 and parts[-3:-1] == ("src", "gen"):
+                      bad.append(f"generated ROM-derived C: {name}")
+                  if parts[-2:] == ("recomp", "funcs.h"):
+                      bad.append(f"generated ROM-derived header: {name}")
+                  if parts[-2:] == ("mods", "state.toml"):
+                      bad.append(f"per-machine mod state: {name}")
+                  if ".git" in parts:
+                      bad.append(f"Git metadata: {name}")
+              for required in ("CMakeLists.txt", "rom_identity.txt", "README.txt"):
+                  if not any(path.name == required for path in paths):
+                      bad.append(f"missing required setup file: {required}")
+              for required in ("updater.py", "cacert.pem", "BUILD_PROVENANCE.json"):
+                  if not any(path.name == required and path.parent.name == "update" for path in paths):
+                      bad.append(f"missing updater runtime file: update/{required}")
+              if bad:
+                  for item in bad:
+                      print(f"::error::{item}", file=sys.stderr)
+                  raise SystemExit("Refusing to publish this setup pack.")
+              print(f"Verified {archive_path}: no rom.cfg, ROM images, generated code, or per-machine state.")
+          PY
+
+      # When a private verified-ROM URL is configured, generate the game code
+      # only in this ephemeral runner and publish playable, platform-native outputs.
+      - name: Build and package playable native release
+        if: env.KIRBY_ROM_URL != ''
+        run: |
+          set -euo pipefail
+          source "${TOOLCHAIN_DIR}/env.sh"
+          ROM="$RUNNER_TEMP/kirby-super-star-release.sfc"
+          # Mega share links need MEGA's API and link decryption key. A plain
+          # curl fetch returns the ~2 KB browser page, not the ROM bytes.
+          node --version
+          npm --version
+          npm install --prefix "$RUNNER_TEMP/mega-rom-downloader" --no-save --ignore-scripts megajs@1.3.10
+          KIRBY_ROM_OUTPUT="$ROM" \
+            NODE_PATH="$RUNNER_TEMP/mega-rom-downloader/node_modules" \
+            node scripts/download_mega_rom.cjs
+          test -s "$ROM" || { echo "::error::MEGA ROM download was empty."; exit 1; }
+          EXTRA=()
+          if [[ -n "${SNESRECOMP_SDL3_SOURCE_DIR:-}" ]]; then
+            EXTRA+=("-DSNESRECOMP_SDL3_SOURCE_DIR=${SNESRECOMP_SDL3_SOURCE_DIR}")
+          fi
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            EXTRA+=("-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0")
+          fi
+          JOBS="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
+          bash tools/regen.sh --rom "$ROM"
+          # Fail closed if generation produces the old zero-AOT seed build.
+          if ! grep -Eq '^RecompReturn I_RESET_M[01]X[01]\(' recomp/funcs.h || \
+             ! grep -Eq 'I_RESET_M[01]X[01]\(' src/gen/bank00_v2.c; then
+            echo "::error::ROM generation did not emit Kirby's I_RESET AOT variants."
+            sed -n '1,120p' recomp/funcs.h || true
+            exit 1
+          fi
+          cmake -S . -B build-playable -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSNESRECOMP_SETUP_HOST=OFF \
+            -DSNESRECOMP_ENABLE_TRACE=OFF \
+            -DSNESRECOMP_BUILD_VERSION="${RELEASE_VERSION}" \
+            "${EXTRA[@]}"
+          cmake --build build-playable -j"$JOBS" --target "${EXE_NAME}"
+
+          # A compiler success is not evidence that the PPU produces a visible
+          # picture. Smoke-test the actual ROM-derived binary before packaging
+          # it, using the framework's headless SDL + screenshot path.
+          SMOKE="$RUNNER_TEMP/kirby-smoke-test"
+          mkdir -p "$SMOKE"
+          cat >"$SMOKE/config.ini" <<'SMOKE_CONFIG'
+          [Graphics]
+          OutputMethod = SDL-Software
+          NewRenderer = 1
+          WindowScale = 1
+
+          [General]
+          DisableFrameDelay = 1
+          Autosave = 0
+          SkipLauncher = 1
+
+          [Sound]
+          EnableAudio = 0
+          SMOKE_CONFIG
+          GAME="$GITHUB_WORKSPACE/build-playable/${EXE_NAME}"
+          if [[ "${{ matrix.artifact }}" == "windows-x64" ]]; then GAME="$GAME.exe"; fi
+          set +e
+          (
+            cd "$SMOKE"
+            SDL_VIDEODRIVER=dummy \
+            SDL_AUDIODRIVER=dummy \
+            SNESRECOMP_RUN_FRAMES=3600 \
+            SNESRECOMP_SCREENSHOT="$SMOKE/frame.ppm" \
+            SNESRECOMP_SCREENSHOT_FRAME=3600 \
+            SNESRECOMP_STATE_TRACE="$SMOKE/state.csv" \
+            SNESRECOMP_KIRBY_BOOT_TRACE=1 \
+            SNESRECOMP_DUMP_INTERP_RECENT=1 \
+            SNESRECOMP_FRAMEDUMP_PIXELS=1 \
+            SNESRECOMP_FRAMEDUMP_VIDEO=1 \
+            SNESRECOMP_FRAMEDUMP_START=3598 \
+            SNESRECOMP_FRAMEDUMP_END=3600 \
+              "$GAME" --no-launcher --rom "$ROM" --config "$SMOKE/config.ini" --framedump "$SMOKE/frames"
+          ) >"$SMOKE/game.log" 2>&1
+          GAME_RC=$?
+          set -e
+          if [[ "$GAME_RC" -ne 0 ]]; then
+            cat "$SMOKE/game.log"
+            echo "::error::Playable binary exited with code $GAME_RC during the headless render smoke test."
+            exit "$GAME_RC"
+          fi
+          if [[ ! -s "$SMOKE/frame.ppm" ]]; then
+            cat "$SMOKE/game.log"
+            echo "::error::Playable binary did not produce its requested rendered-frame screenshot."
+            exit 1
+          fi
+          # A mostly-black Nintendo logo can be valid; check guest/APU/PPU
+          # progression separately rather than relying on colored-pixel counts.
+          python3 - "$SMOKE/game.log" <<'PY_BOOT'
+          from pathlib import Path
+          import re
+          import sys
+
+          log = Path(sys.argv[1]).read_text(errors="replace")
+          match = re.search(
+              r"\[kirby_boot\] final frame=3600 resume_pc=([0-9A-Fa-f]{6}) "
+              r"INIDISP=([0-9A-Fa-f]{2}) TM=([0-9A-Fa-f]{2}) TS=([0-9A-Fa-f]{2}) "
+              r"SPC_PC=([0-9A-Fa-f]{4}) IPL_ROM=(\d+) portTimeValid=(\d+) "
+              r"OUT=([0-9A-Fa-f]{2}),([0-9A-Fa-f]{2}),([0-9A-Fa-f]{2}),([0-9A-Fa-f]{2})",
+              log,
+          )
+          if not match:
+              raise SystemExit("::error::Missing final CPU/APU/PPU boot checkpoint.")
+          pc, inidisp, tm, ts, spc_pc, ipl_rom, port_mapped, *out_ports = match.groups()
+          pc, inidisp, tm, ts, spc_pc, ipl_rom = (
+              int(pc, 16), int(inidisp, 16), int(tm, 16), int(ts, 16),
+              int(spc_pc, 16), int(ipl_rom)
+          )
+          print(f"Boot checkpoint: CPU continuation={pc:06X}, INIDISP={inidisp:02X}, "
+                f"TM/TS={tm:02X}/{ts:02X}, SPC PC={spc_pc:04X}, IPL mapped={ipl_rom}, "
+                f"APU port-time mapped={port_mapped}, APU out={','.join(out_ports)}")
+          if 0x00D5E9 <= pc <= 0x00D5FF:
+              raise SystemExit("::error::CPU is still in the $00:D5E9 APU-upload wait loop at frame 3600.")
+          if (tm | ts) == 0 or (inidisp & 0x80):
+              raise SystemExit("::error::PPU has no enabled screen layer or remains forced blank at frame 3600.")
+          if spc_pc == 0xFFD2 and ipl_rom:
+              raise SystemExit("::error::SPC is still waiting in the APU IPL ROM at frame 3600.")
+          print("Boot-state smoke test passed.")
+          PY_BOOT
+
+          python3 - "$SMOKE/frame.ppm" <<'PY_SMOKE'
+          from pathlib import Path
+          import re
+          import sys
+
+          path = Path(sys.argv[1])
+          raw = path.read_bytes()
+          header, sep, pixels = raw.partition(b"\n255\n")
+          if not sep or not header.startswith(b"P6\n"):
+              raise SystemExit("::error::Screenshot is not a valid binary PPM.")
+          dimensions = re.findall(rb"\d+", header[2:])
+          if len(dimensions) != 2:
+              raise SystemExit("::error::Screenshot has an invalid PPM dimension header.")
+          width, height = map(int, dimensions)
+          if width < 256 or height < 224 or len(pixels) != width * height * 3:
+              raise SystemExit(
+                  f"::error::Screenshot data size is invalid: {width}x{height}, "
+                  f"{len(pixels)} pixel bytes."
+              )
+          triples = zip(pixels[0::3], pixels[1::3], pixels[2::3])
+          nonblack = 0
+          colors = set()
+          min_x, min_y, max_x, max_y = width, height, -1, -1
+          blue_pixels = green_pixels = white_pixels = 0
+          for index, (r, g, b) in enumerate(triples):
+              colors.add((r, g, b))
+              if r > 8 or g > 8 or b > 8:
+                  nonblack += 1
+                  x = index % width
+                  y = index // width
+                  min_x, min_y = min(min_x, x), min(min_y, y)
+                  max_x, max_y = max(max_x, x), max(max_y, y)
+                  # Tolerant color families for the mostly-black Nintendo
+                  # logo: green, blue, and bright neutral/white artwork.
+                  if b > 32 and b > r * 1.18 and b > g * 1.08:
+                      blue_pixels += 1
+                  if g > 32 and g > r * 1.15 and g > b * 1.05:
+                      green_pixels += 1
+                  if min(r, g, b) > 150 and max(r, g, b) - min(r, g, b) < 100:
+                      white_pixels += 1
+          ratio = nonblack / (width * height)
+          box_w = max_x - min_x + 1 if max_x >= min_x else 0
+          box_h = max_y - min_y + 1 if max_y >= min_y else 0
+          print(
+              f"Headless render: {width}x{height}; nonblack={nonblack} ({ratio:.1%}); "
+              f"colors={len(colors)}; art bounds={box_w}x{box_h}; "
+              f"blue/green/white={blue_pixels}/{green_pixels}/{white_pixels}"
+          )
+          # A valid logo can be mostly black; don't demand a bright/full-screen
+          # image. But reject scattered specks and empty frames: the artwork
+          # must cover a meaningful region and include all three logo color families.
+          if (nonblack < 600 or ratio < 0.01 or len(colors) < 4
+                  or box_w < width * 0.25 or box_h < height * 0.08
+                  or blue_pixels < 25 or green_pixels < 25 or white_pixels < 25):
+              raise SystemExit(
+                  "::error::Frame lacks spatially meaningful green/blue/white logo or game artwork."
+              )
+          print("Rendered artwork check passed; completed boot-state validation was also required.")
+          PY_SMOKE
+
+          rm -f "$ROM"
+          bash scripts/package_playable_release.sh build-playable "${{ matrix.artifact }}" "${RELEASE_VERSION}"
+          ls -lh dist/
+
+      # Without a private ROM URL the existing setup-native wrappers remain as fallback.
+      - name: Preserve render smoke diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kirby-render-smoke-failure-${{ matrix.artifact }}
+          path: ${{ runner.temp }}/kirby-smoke-test/**
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Package Windows setup installer
+        if: env.KIRBY_ROM_URL == '' && matrix.artifact == 'windows-x64'
+        run: bash scripts/package_native_release.sh "${{ matrix.artifact }}" "${RELEASE_VERSION}"
+
+      - name: Package macOS setup app and DMG
+        if: env.KIRBY_ROM_URL == '' && startsWith(matrix.artifact, 'macos-')
+        run: bash scripts/package_native_release.sh "${{ matrix.artifact }}" "${RELEASE_VERSION}"
+
+      - name: Package Linux setup AppImage
+        if: env.KIRBY_ROM_URL == '' && matrix.artifact == 'linux-x64'
+        run: bash scripts/package_native_release.sh "${{ matrix.artifact }}" "${RELEASE_VERSION}"
+
+      - name: Verify native outputs
+        env:
+          PLATFORM: ${{ matrix.artifact }}
+        run: |
+          set -euo pipefail
+          case "${PLATFORM}" in
+            windows-x64)
+              test -s "dist/kirbysuperstar-${RELEASE_VERSION}-windows-x64.exe"
+              if [[ -n "${KIRBY_ROM_URL:-}" ]]; then
+                test -s "dist/kirbysuperstar-${RELEASE_VERSION}-windows-x64-playable.zip"
+              fi
+              ;;
+            macos-arm64|macos-x64)
+              test -s "dist/kirbysuperstar-${RELEASE_VERSION}-${PLATFORM}.dmg"
+              test -s "dist/kirbysuperstar-${RELEASE_VERSION}-${PLATFORM}-app.zip"
+              ;;
+            linux-x64) test -s "dist/kirbysuperstar-${RELEASE_VERSION}-linux-x64.AppImage" ;;
+          esac
+
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ZIP_PREFIX }}-${{ matrix.artifact }}
-          path: dist/${{ env.ZIP_PREFIX }}-*-${{ matrix.artifact }}.zip
+          path: |
+            dist/${{ env.ZIP_PREFIX }}-*-${{ matrix.artifact }}*.zip
+            dist/${{ env.ZIP_PREFIX }}-*-${{ matrix.artifact }}.exe
+            dist/${{ env.ZIP_PREFIX }}-*-${{ matrix.artifact }}.dmg
+            dist/${{ env.ZIP_PREFIX }}-*-${{ matrix.artifact }}.AppImage
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30
           compression-level: 0
 
   release:
@@ -298,25 +605,90 @@ jobs:
         with:
           path: artifacts
 
-      - name: Collect zips
+      - name: Collect setup/native packages and updater metadata
+        env:
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+          RELEASE_TAG_NAME: ${{ needs.preflight.outputs.tag }}
         run: |
           set -euo pipefail
           mkdir -p dist
-          find artifacts -type f -name "${ZIP_PREFIX}-*.zip" -exec cp -v {} dist/ \;
-          # Four platforms in, four zips out. A release that silently carries
-          # three is the failure this counts for.
-          count="$(find dist -name "${ZIP_PREFIX}-*.zip" | wc -l | tr -d ' ')"
-          if [[ "${count}" -ne 4 ]]; then
-            echo "::error::expected 4 platform zips, found ${count}"
-            ls -la dist
-            exit 1
-          fi
-          ( cd dist && sha256sum "${ZIP_PREFIX}"-*.zip > SHA256SUMS )
-          cat dist/SHA256SUMS
+          find artifacts -type f \( \
+            -name 'kirbysuperstar-*.zip' -o \
+            -name 'kirbysuperstar-*.exe' -o \
+            -name 'kirbysuperstar-*.dmg' -o \
+            -name 'kirbysuperstar-*.AppImage' \) -exec cp -v {} dist/ \;
+
+          # The updater consumes these exact four portable setup-pack names.
+          for platform in linux-x64 windows-x64 macos-arm64 macos-x64; do
+            filename="kirbysuperstar-${RELEASE_VERSION}-${platform}.zip"
+            if [[ ! -f "dist/${filename}" ]]; then
+              echo "::error::missing updater package dist/${filename}"
+              ls -la dist/
+              exit 1
+            fi
+            (cd dist && sha256sum "${filename}" > "SHA256SUMS-${platform}.txt")
+          done
+
+          # Native wrappers are additional manual-download assets.
+          test -s "dist/kirbysuperstar-${RELEASE_VERSION}-windows-x64.exe"
+          test -s "dist/kirbysuperstar-${RELEASE_VERSION}-linux-x64.AppImage"
+          for platform in macos-arm64 macos-x64; do
+            test -s "dist/kirbysuperstar-${RELEASE_VERSION}-${platform}.dmg"
+            test -s "dist/kirbysuperstar-${RELEASE_VERSION}-${platform}-app.zip"
+          done
+
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          version = os.environ["RELEASE_VERSION"]
+          tag = os.environ["RELEASE_TAG_NAME"]
+          metadata = {
+              "repository": "NVDEMU/KirbySuperStarPC",
+              "channel": "nightly" if tag == "Nightly" else "release",
+              "tag": tag,
+              "version": version,
+              "commit": os.environ["GITHUB_SHA"],
+              "platforms": {
+                  "linux-x64": f"kirbysuperstar-{version}-linux-x64.zip",
+                  "windows-x64": f"kirbysuperstar-{version}-windows-x64.zip",
+                  "macos-arm64": f"kirbysuperstar-{version}-macos-arm64.zip",
+                  "macos-x64": f"kirbysuperstar-{version}-macos-x64.zip",
+              },
+              "native_assets": {
+                  "windows-x64": f"kirbysuperstar-{version}-windows-x64.exe",
+                  "linux-x64": f"kirbysuperstar-{version}-linux-x64.AppImage",
+                  "macos-arm64": f"kirbysuperstar-{version}-macos-arm64.dmg",
+                  "macos-x64": f"kirbysuperstar-{version}-macos-x64.dmg",
+              },
+          }
+          Path("dist/nightly-manifest.json").write_text(
+              json.dumps(metadata, indent=2) + "\n", encoding="utf-8"
+          )
+          print(f"Generated checksum files and updater metadata for {tag}")
+          PY
+
+          # Catch malformed updater metadata before checksums or publication.
+          python3 -m json.tool dist/nightly-manifest.json >/dev/null
+          echo "nightly-manifest.json is valid JSON."
+
+          # Overall SHA256SUMS covers all public platform assets and metadata.
+          (cd dist && sha256sum kirbysuperstar-* nightly-manifest.json > SHA256SUMS)
 
       # The tag is created here, after all four builds succeeded, so a failed
       # build never leaves a version number claimed by nothing.
+      - name: Move Nightly tag to the built commit
+        if: github.event_name == 'push' && github.ref_type == 'branch'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f Nightly "${GITHUB_SHA}"
+          git push origin refs/tags/Nightly --force
+
       - name: Tag the commit
+        if: github.event_name == 'workflow_dispatch'
         env:
           TAG: ${{ needs.preflight.outputs.tag }}
         run: |
@@ -334,24 +706,31 @@ jobs:
       - name: Release notes
         env:
           TAG: ${{ needs.preflight.outputs.tag }}
+          KIRBY_ROM_URL: ${{ secrets.KIRBY_ROM_URL }}
         run: |
           set -euo pipefail
-          # From rom_identity.txt, not a copy baked into this workflow.
           ROM_FILE="$(python3 snesrecomp/tools/rom_identity.py rom_identity.txt --get rom_file)"
           ROM_SHA256="$(python3 snesrecomp/tools/rom_identity.py rom_identity.txt --get expected_sha256)"
           {
-            echo "Kirby Super Star ${TAG} — setup packs"
+            echo "Kirby Super Star Recomp ${TAG}"
             echo
-            echo "These packs do not contain the game. Each holds a setup program, the"
-            echo "recompiler and the source; on first run it takes your own copy of"
-            echo "${ROM_FILE} (SHA-256 ${ROM_SHA256}), recompiles it locally, and builds"
-            echo "the playable game. No ROM data is included or downloaded."
-            echo
-            if [[ "${{ inputs.embed_toolchain }}" != "false" ]]; then
-              echo "The portable build tools (cmake-clang-v1) are embedded in every pack."
+            if [[ -n "${KIRBY_ROM_URL:-}" ]]; then
+              echo "This release includes playable native builds for macOS, Windows, and Linux."
+              echo "Each build includes the compiled recompiled program and requires your own verified"
+              echo "${ROM_FILE} at runtime. No ROM image or local ROM path is included."
+              echo "The Windows EXE installs the playable runtime and launches it; the macOS DMG"
+              echo "contains a real .app bundle; the Linux AppImage launches the playable build."
             else
-              echo "The portable build tools (cmake-clang-v1) are downloaded on first run."
+              echo "This release contains setup packs and native launch wrappers, not a prebuilt game."
+              echo "On first launch, choose your own ${ROM_FILE} (SHA-256 ${ROM_SHA256}), then select"
+              echo "Generate & rebuild. No ROM image is shipped."
+              echo
+              echo "The Windows EXE is a self-contained setup installer. The macOS DMG contains a"
+              echo "real .app bundle. The Linux AppImage initializes a writable per-user setup folder."
             fi
+            echo "Your ROM path cache is created locally and is never included in release assets."
+            echo
+            echo "The portable ZIP is the updater payload, with a per-platform SHA-256 file."
             echo
             echo '### Framework revisions'
             echo
@@ -366,10 +745,14 @@ jobs:
         with:
           tag_name: ${{ needs.preflight.outputs.tag }}
           target_commitish: ${{ github.sha }}
-          name: "Kirby Super Star ${{ needs.preflight.outputs.tag }}"
+          name: ${{ needs.preflight.outputs.tag == 'Nightly' && 'Kirby Super Star Recomp Nightly' || format('Kirby Super Star Recomp {0}', needs.preflight.outputs.tag) }}
+          prerelease: ${{ needs.preflight.outputs.tag == 'Nightly' }}
+          overwrite_files: true
           body_path: notes.md
           files: |
-            dist/${{ env.ZIP_PREFIX }}-*.zip
+            dist/${{ env.ZIP_PREFIX }}-*
             dist/SHA256SUMS
+            dist/SHA256SUMS-*.txt
+            dist/nightly-manifest.json
           fail_on_unmatched_files: true
-          make_latest: true
+          make_latest: ${{ needs.preflight.outputs.tag == 'Nightly' && 'false' || 'true' }}

@@ -29,6 +29,21 @@
 #include "game_rtl.h"
 #include "snesrecomp_rom_identity.h"  /* generated from rom_identity.txt */
 
+#include <stdio.h>
+#include <stdlib.h>
+#include "snes/interp_bridge.h"
+
+/* Emit the last interpreted guest instructions only in diagnostic CI runs.
+ * This reveals whether a nominally successful boot is actually trapped in a
+ * reset-vector/open-bus loop before the PPU receives any writes. */
+static void kirby_dump_interpreter_tail(void)
+{
+    if (getenv("SNESRECOMP_DUMP_INTERP_RECENT") != NULL) {
+        fprintf(stderr, "[kirby_boot] final interpreter trace\n");
+        interp_bridge_dump_recent(512, stderr);
+    }
+}
+
 #ifndef __ANDROID__
 #define SDL_MAIN_HANDLED 1
 #endif
@@ -63,5 +78,7 @@ static const SnesDesktopHostGame kGameHost = {
 #endif
 int main(int argc, char **argv)
 {
+    if (getenv("SNESRECOMP_DUMP_INTERP_RECENT") != NULL)
+        atexit(kirby_dump_interpreter_tail);
     return snesrecomp_desktop_main(&kGameHost, argc, argv);
 }

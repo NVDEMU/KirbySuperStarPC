@@ -1,0 +1,107 @@
+#!/bin/sh
+set -u
+
+show_error() {
+  /usr/bin/osascript -e 'display dialog "Kirby Super Star Recomp could not start. See Library/Logs/Kirby Super Star Recomp/launcher.log under your home folder for details." buttons {"OK"} default button "OK" with icon stop' >/dev/null 2>&1 || true
+}
+
+if [ -z "$HOME" ]; then
+  show_error
+  exit 1
+fi
+
+LOG_DIR="$HOME/Library/Logs/Kirby Super Star Recomp"
+if ! mkdir -p "$LOG_DIR"; then
+  show_error
+  exit 1
+fi
+LOG_FILE="$LOG_DIR/launcher.log"
+exec >>"$LOG_FILE" 2>&1
+
+echo
+echo "===== Kirby Super Star Recomp launcher: $(date) ====="
+
+fail() {
+  echo "ERROR: $*" >&2
+  show_error
+  exit 1
+}
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd -P)" || fail "Could not locate app Resources."
+APP_PACK="$SCRIPT_DIR/setup-pack"
+DATA="$HOME/Library/Application Support/NVDEMU/Kirby Super Star Recomp"
+PROVENANCE="$APP_PACK/update/BUILD_PROVENANCE.json"
+MARKER="$DATA/.app-bundle-provenance.json"
+UPDATED=0
+
+[ -d "$APP_PACK" ] || fail "App resources do not contain setup-pack."
+[ -f "$PROVENANCE" ] || fail "Setup pack is missing update/BUILD_PROVENANCE.json."
+mkdir -p "$DATA" || fail "Could not create the writable setup folder."
+
+if [ ! -f "$MARKER" ] || ! cmp -s "$MARKER" "$PROVENANCE"; then
+  echo "Syncing current setup-pack files into: $DATA"
+  # Update application files without overwriting the user's ROM path, settings,
+  # saves, generated code, or custom/installed mod state.
+  # Do not preserve the bundle archive timestamps: they are intentionally
+  # old to avoid time-zone issues, but existing object files may be newer.
+  # Fresh mtimes make the next Generate & rebuild recompile updated sources.
+  /usr/bin/rsync -a --no-times \
+    --exclude='/rom.cfg' \
+    --exclude='/config.ini' \
+    --exclude='/keybinds.ini' \
+    --exclude='/input.ini' \
+    --exclude='/controller.ini' \
+    --exclude='/settings.toml' \
+    --exclude='/game_options.toml' \
+    --exclude='/saves/***' \
+    --exclude='/build/***' \
+    --exclude='/src/gen/***' \
+    --exclude='/recomp/funcs.h' \
+    --exclude='/mods/state.toml' \
+    --exclude='/mods/custom/***' \
+    --exclude='/mods/installed/***' \
+    "$APP_PACK/" "$DATA/" || fail "Could not install app resources into the writable setup folder."
+  cp "$PROVENANCE" "$MARKER.tmp.$$" || fail "Could not write update marker."
+  mv -f "$MARKER.tmp.$$" "$MARKER" || fail "Could not activate update marker."
+  UPDATED=1
+fi
+
+HOST="$DATA/KirbySuperStarSNESRecomp"
+[ -f "$HOST" ] || fail "Setup-host executable is missing at $HOST."
+chmod u+x "$HOST" || fail "Could not mark setup host executable."
+ANALYZER="$DATA/snesrecomp/recompiler-rs/target/release/snesrecomp-analyze"
+if [ -f "$ANALYZER" ]; then
+  chmod u+x "$ANALYZER" || fail "Could not mark the bundled analyzer executable."
+fi
+
+cd "$DATA" || fail "Could not enter the writable setup folder."
+if [ "$UPDATED" -eq 1 ]; then
+  EXISTING_GAME="$DATA/build/KirbySuperStarSNESRecomp"
+  if [ -x "$EXISTING_GAME" ]; then
+    echo "Detected an existing playable build: $EXISTING_GAME"
+    CHOICE=$(/usr/bin/osascript <<'APPLESCRIPT'
+set pickedButton to button returned of (display dialog "An already-built Kirby Super Star executable was found.\n\nLaunch that existing build now and skip regenerating/rebuilding C? It may not contain the latest runtime or graphics fixes.\n\nChoose Setup & rebuild to use the updated sources." with title "Kirby Super Star Recomp" buttons {"Setup & rebuild", "Launch existing build"} default button "Setup & rebuild" cancel button "Setup & rebuild" with icon caution)
+return pickedButton
+APPLESCRIPT
+) || CHOICE="Setup & rebuild"
+    if [ "$CHOICE" = "Launch existing build" ]; then
+      echo "Player chose the existing build; skipping source generation and C rebuild."
+      exec "$EXISTING_GAME" --launcher "$@"
+    fi
+  fi
+
+  # Updating sources normally forces the wizard so a stale executable isn't
+  # launched silently. The explicit choice above is the only bypass.
+  echo "Updated source pack detected; keeping the setup UI open for Generate & rebuild."
+  export SNESRECOMP_NO_HANDOFF=1
+  export SNESRECOMP_FORCE_SETUP=1
+fi
+
+echo "Launching setup host: $HOST"
+"$HOST" "$@"
+STATUS=$?
+echo "Setup host exited with status $STATUS."
+if [ "$STATUS" -ne 0 ]; then
+  show_error
+fi
+exit "$STATUS"

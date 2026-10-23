@@ -10,7 +10,7 @@
 name = "I_RESET"
 addr = "8004"
 bank = 0
-emit = false
+emit = true
 note = "Emulation RESET vector ($FFFC)"
 
 [[func]]
