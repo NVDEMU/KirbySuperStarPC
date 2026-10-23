@@ -72,6 +72,8 @@ mkdir -p "$MACOS" "$PACK_BUILD"
   --exclude='/mods/state.toml' --exclude='/mods/custom/***' --exclude='/mods/installed/***' \
   "$BUILD_DIR/" "$PACK_BUILD/"
 [[ -x "$PACK_BUILD/KirbySuperStarSNESRecomp" ]] || { echo "error: staged app lacks the playable executable." >&2; exit 1; }
+# Bundle Homebrew-linked libraries; a successful link on Actions is not enough.
+bash "$ROOT/scripts/bundle_macos_dylibs.sh" "$PACK_BUILD/KirbySuperStarSNESRecomp" "$PACK_BUILD/lib"
 if find "$PACK_BUILD" -type f \( -iname '*.sfc' -o -iname '*.smc' -o -iname '*.fig' -o -iname '*.srm' -o -iname '*.sav' \) -print -quit | grep -q .; then
   echo "error: refusing to package ROM or save data in the app bundle." >&2; exit 1
 fi
@@ -79,7 +81,7 @@ if [[ -e "$PACK_BUILD/rom.cfg" ]]; then echo "error: refusing to bundle machine-
 
 cp "$ROOT/scripts/macos_playable_app_launcher.sh" "$RESOURCES/launcher.sh"
 chmod 644 "$RESOURCES/launcher.sh"
-/usr/bin/clang -std=c11 -O2 -Wall -Wextra -Werror "$ROOT/scripts/macos_app_launcher.c" -o "$MACOS/KirbySuperStarRecomp"
+/usr/bin/clang -std=c11 -O2 -Wall -Wextra -Werror -mmacosx-version-min=11.0 "$ROOT/scripts/macos_app_launcher.c" -o "$MACOS/KirbySuperStarRecomp"
 chmod 755 "$MACOS/KirbySuperStarRecomp"
 /bin/sh -n "$RESOURCES/launcher.sh"
 file "$MACOS/KirbySuperStarRecomp" | grep -q 'Mach-O' || { echo "error: CFBundleExecutable is not a native Mach-O binary." >&2; exit 1; }

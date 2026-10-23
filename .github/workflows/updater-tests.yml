@@ -36,7 +36,7 @@ jobs:
         run: python tools/test_nightly_updater.py
 
       - name: Check release packager shell syntax
-        run: bash -n scripts/package_release.sh scripts/package_native_release.sh scripts/macos_app_launcher.sh scripts/package_playable_macos_app.sh scripts/package_playable_release.sh
+        run: bash -n scripts/package_release.sh scripts/package_native_release.sh scripts/macos_app_launcher.sh scripts/package_playable_macos_app.sh scripts/package_playable_release.sh scripts/bundle_macos_dylibs.sh
         shell: bash
 
       - name: Check MEGA downloader syntax
