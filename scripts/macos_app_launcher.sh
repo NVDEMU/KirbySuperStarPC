@@ -76,9 +76,22 @@ fi
 
 cd "$DATA" || fail "Could not enter the writable setup folder."
 if [ "$UPDATED" -eq 1 ]; then
-  # Updating the framework/source pack must not silently hand off to an older
-  # playable binary in build/. Keep the setup UI available so the player can
-  # regenerate and rebuild with the updated runtime.
+  EXISTING_GAME="$DATA/build/KirbySuperStarSNESRecomp"
+  if [ -x "$EXISTING_GAME" ]; then
+    echo "Detected an existing playable build: $EXISTING_GAME"
+    CHOICE=$(/usr/bin/osascript <<'APPLESCRIPT'
+set pickedButton to button returned of (display dialog "An already-built Kirby Super Star executable was found.\n\nLaunch that existing build now and skip regenerating/rebuilding C? It may not contain the latest runtime or graphics fixes.\n\nChoose Setup & rebuild to use the updated sources." with title "Kirby Super Star Recomp" buttons {"Setup & rebuild", "Launch existing build"} default button "Setup & rebuild" cancel button "Setup & rebuild" with icon caution)
+return pickedButton
+APPLESCRIPT
+) || CHOICE="Setup & rebuild"
+    if [ "$CHOICE" = "Launch existing build" ]; then
+      echo "Player chose the existing build; skipping source generation and C rebuild."
+      exec "$EXISTING_GAME" --launcher "$@"
+    fi
+  fi
+
+  # Updating sources normally forces the wizard so a stale executable isn't
+  # launched silently. The explicit choice above is the only bypass.
   echo "Updated source pack detected; keeping the setup UI open for Generate & rebuild."
   export SNESRECOMP_NO_HANDOFF=1
   export SNESRECOMP_FORCE_SETUP=1
