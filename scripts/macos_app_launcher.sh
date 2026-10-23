@@ -42,7 +42,10 @@ if [ ! -f "$MARKER" ] || ! cmp -s "$MARKER" "$PROVENANCE"; then
   echo "Syncing current setup-pack files into: $DATA"
   # Update application files without overwriting the user's ROM path, settings,
   # saves, generated code, or custom/installed mod state.
-  /usr/bin/rsync -a \
+  # Do not preserve the bundle archive timestamps: they are intentionally
+  # old to avoid time-zone issues, but existing object files may be newer.
+  # Fresh mtimes make the next Generate & rebuild recompile updated sources.
+  /usr/bin/rsync -a --no-times \
     --exclude='/rom.cfg' \
     --exclude='/config.ini' \
     --exclude='/keybinds.ini' \

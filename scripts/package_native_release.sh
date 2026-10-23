@@ -216,7 +216,7 @@ if [ ! -f "$MARKER" ] || ! cmp -s "$MARKER" "$PROVENANCE"; then
     --exclude='./mods/state.toml' \
     --exclude='./mods/custom' \
     --exclude='./mods/installed' \
-    -cf - . | tar -C "$DATA" -xf -; then
+    -cf - . | tar -C "$DATA" --touch -xf -; then
     fail "Could not install the AppImage's files. See $LOG_DIR/launcher.log."
   fi
   cp "$PROVENANCE" "$MARKER.tmp.$$" || fail "Could not write application update marker."
