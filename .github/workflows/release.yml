@@ -408,7 +408,12 @@ jobs:
             SNESRECOMP_RUN_FRAMES=3600 \
             SNESRECOMP_SCREENSHOT="$SMOKE/frame.ppm" \
             SNESRECOMP_SCREENSHOT_FRAME=3600 \
-              "$GAME" --no-launcher --rom "$ROM" --config "$SMOKE/config.ini"
+            SNESRECOMP_STATE_TRACE="$SMOKE/state.csv" \
+            SNESRECOMP_FRAMEDUMP_PIXELS=1 \
+            SNESRECOMP_FRAMEDUMP_VIDEO=1 \
+            SNESRECOMP_FRAMEDUMP_START=3598 \
+            SNESRECOMP_FRAMEDUMP_END=3600 \
+              "$GAME" --no-launcher --rom "$ROM" --config "$SMOKE/config.ini" --framedump "$SMOKE/frames"
           ) >"$SMOKE/game.log" 2>&1
           GAME_RC=$?
           set -e
