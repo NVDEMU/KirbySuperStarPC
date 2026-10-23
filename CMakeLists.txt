@@ -28,40 +28,45 @@ if(NOT EXISTS "${SNESRECOMP_ROOT}/runner/runner.cmake")
         "Run: git submodule update --init --recursive")
 endif()
 
-# Kirby's SA-1 boot performs an SPC IPL upload handshake before the
-# cartridge has established the APU port-time mapping. Do not force the
-# absolute APU timeline during that unmapped phase: use relative catch-up until
-# portTimeValid becomes true, otherwise startup can remain in $00:D5E9 forever.
-# Keep this narrowly scoped patch in the title repo so a clean submodule checkout
-# and the player's in-app Generate & rebuild use the same boot behavior.
-set(_KIRBY_APU_TIMELINE_PATCH
-    "${CMAKE_CURRENT_SOURCE_DIR}/patches/snesrecomp-apu-port-timeline.patch")
-execute_process(
-    COMMAND git apply --check "${_KIRBY_APU_TIMELINE_PATCH}"
-    WORKING_DIRECTORY "${SNESRECOMP_ROOT}"
-    RESULT_VARIABLE _kirby_apu_patch_check
-    OUTPUT_QUIET ERROR_QUIET)
-if("${_kirby_apu_patch_check}" STREQUAL "0")
+# Kirby's SA-1 upload handshake starts before port-time mapping is valid.
+# Apply the small runtime and test patches independently and idempotently. This
+# also handles a local checkout where runtime changes were already applied but
+# the focused framework tests still need updating.
+function(kirby_apply_framework_patch patch_name description)
+    set(_kirby_patch "${CMAKE_CURRENT_SOURCE_DIR}/patches/${patch_name}")
     execute_process(
-        COMMAND git apply "${_KIRBY_APU_TIMELINE_PATCH}"
+        COMMAND git apply --check "${_kirby_patch}"
         WORKING_DIRECTORY "${SNESRECOMP_ROOT}"
-        RESULT_VARIABLE _kirby_apu_patch_apply)
-    if(NOT "${_kirby_apu_patch_apply}" STREQUAL "0")
-        message(FATAL_ERROR
-            "Failed to apply Kirby's SA-1 APU boot-sync fix to ${SNESRECOMP_ROOT}.")
-    endif()
-else()
-    execute_process(
-        COMMAND git apply --reverse --check "${_KIRBY_APU_TIMELINE_PATCH}"
-        WORKING_DIRECTORY "${SNESRECOMP_ROOT}"
-        RESULT_VARIABLE _kirby_apu_patch_reverse_check
+        RESULT_VARIABLE _kirby_patch_check
         OUTPUT_QUIET ERROR_QUIET)
-    if(NOT "${_kirby_apu_patch_reverse_check}" STREQUAL "0")
-        message(FATAL_ERROR
-            "Kirby's SA-1 APU boot-sync patch does not match the pinned framework. "
-            "Review patches/snesrecomp-apu-port-timeline.patch.")
+    if("${_kirby_patch_check}" STREQUAL "0")
+        execute_process(
+            COMMAND git apply "${_kirby_patch}"
+            WORKING_DIRECTORY "${SNESRECOMP_ROOT}"
+            RESULT_VARIABLE _kirby_patch_apply)
+        if(NOT "${_kirby_patch_apply}" STREQUAL "0")
+            message(FATAL_ERROR "Failed to apply ${description}.")
+        endif()
+    else()
+        execute_process(
+            COMMAND git apply --reverse --check "${_kirby_patch}"
+            WORKING_DIRECTORY "${SNESRECOMP_ROOT}"
+            RESULT_VARIABLE _kirby_patch_reverse_check
+            OUTPUT_QUIET ERROR_QUIET)
+        if(NOT "${_kirby_patch_reverse_check}" STREQUAL "0")
+            message(FATAL_ERROR
+                "${description} does not match this snesrecomp checkout. "
+                "Review patches/${patch_name}.")
+        endif()
     endif()
-endif()
+endfunction()
+
+kirby_apply_framework_patch(
+    "snesrecomp-apu-port-timeline.patch"
+    "Kirby's SA-1 APU boot-sync fix")
+kirby_apply_framework_patch(
+    "snesrecomp-apu-port-timeline-tests.patch"
+    "Kirby's APU timeline policy test update")
 message(STATUS "Kirby SA-1 APU boot-sync fix is active.")
 
 # Experimental Kirby-specific scanline CGRAM replay. Earlier captured
