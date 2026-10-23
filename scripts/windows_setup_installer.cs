@@ -140,7 +140,43 @@ internal static class KirbySuperStarSetupInstaller
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information);
 
-            Process.Start(new ProcessStartInfo(executable) { WorkingDirectory = target, UseShellExecute = true });
+            // Keep a small launch breadcrumb and detect a host that exits immediately.
+            // Process.Start alone only proves Windows created a process; it does not
+            // prove the native launcher survived startup.
+            string diagnostics = Path.Combine(target, "launcher-diagnostics.log");
+            try
+            {
+                File.AppendAllText(diagnostics, DateTime.Now.ToString("o") +
+                    " Installer completed; launching " + executable + Environment.NewLine);
+            }
+            catch { }
+
+            Process launched = Process.Start(new ProcessStartInfo(executable)
+            {
+                WorkingDirectory = target,
+                UseShellExecute = true
+            });
+            if (launched == null)
+                throw new InvalidOperationException("Windows did not return a process for the setup host.");
+
+            if (launched.WaitForExit(4000))
+            {
+                string detail = "Setup host exited within four seconds (exit code " +
+                    launched.ExitCode + ").";
+                try
+                {
+                    File.AppendAllText(diagnostics, DateTime.Now.ToString("o") +
+                        " " + detail + Environment.NewLine);
+                }
+                catch { }
+
+                MessageBox.Show(
+                    detail + "\\n\\nIf you did not close it yourself, check the diagnostic log:\\n" +
+                    diagnostics + "\\n\\nThe installed files were left in place.",
+                    "Kirby Super Star Recomp did not stay open",
+                    MessageBoxButtons.OK,
+                    launched.ExitCode == 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Error);
+            }
         }
         catch (Exception ex)
         {
