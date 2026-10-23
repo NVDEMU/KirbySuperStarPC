@@ -33,28 +33,3 @@ diff --git a/runner/src/snes/interp_bridge.c b/runner/src/snes/interp_bridge.c
 -                        g_snes && cart_has_sa1(g_snes->cart), false)) {
 +                        g_snes && cart_has_sa1(g_snes->cart), false,
 +                        g_snes && g_snes->apu && g_snes->apu->portTimeValid)) {
-diff --git a/tests/interp816/bridge_test.c b/tests/interp816/bridge_test.c
---- a/tests/interp816/bridge_test.c
-+++ b/tests/interp816/bridge_test.c
-@@ -543,15 +543,15 @@
-     printf("S0 APU timeline policy remains cartridge-scoped\n");
--    CHECK(!interp_bridge_use_absolute_apu_timeline(false, false, false),
-+    CHECK(!interp_bridge_use_absolute_apu_timeline(false, false, false, false),
-           "inactive non-SA1 timeline must use legacy catch-up");
--    CHECK(!interp_bridge_use_absolute_apu_timeline(true, false, false),
-+    CHECK(!interp_bridge_use_absolute_apu_timeline(true, false, false, false),
-           "active non-SA1 timeline must use legacy catch-up");
--    CHECK(!interp_bridge_use_absolute_apu_timeline(false, true, false),
-+    CHECK(!interp_bridge_use_absolute_apu_timeline(false, true, false, false),
-           "inactive SA1 timeline must use legacy catch-up");
--    CHECK(interp_bridge_use_absolute_apu_timeline(true, true, false),
-+    CHECK(interp_bridge_use_absolute_apu_timeline(true, true, false, true),
-           "active SA1 timeline must suppress duplicate catch-up");
--    CHECK(interp_bridge_use_absolute_apu_timeline(true, false, true),
-+    CHECK(interp_bridge_use_absolute_apu_timeline(true, false, true, false),
-           "mapped extended frames must suppress duplicate catch-up");
--    CHECK(!interp_bridge_use_absolute_apu_timeline(false, false, true),
-+    CHECK(!interp_bridge_use_absolute_apu_timeline(false, false, true, false),
-           "mapped time before the frame loop must retain bootstrap catch-up");
- 
-     /* No APU port touches: long interpreted work must periodically sync
