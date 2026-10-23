@@ -457,10 +457,14 @@ jobs:
               },
           }
           Path("dist/nightly-manifest.json").write_text(
-              json.dumps(metadata, indent=2) + "\\n", encoding="utf-8"
+              json.dumps(metadata, indent=2) + "\n", encoding="utf-8"
           )
           print(f"Generated checksum files and updater metadata for {tag}")
           PY
+
+          # Catch malformed updater metadata before checksums or publication.
+          python3 -m json.tool dist/nightly-manifest.json >/dev/null
+          echo "nightly-manifest.json is valid JSON."
 
           # Overall SHA256SUMS covers all public platform assets and metadata.
           (cd dist && sha256sum kirbysuperstar-* nightly-manifest.json > SHA256SUMS)
