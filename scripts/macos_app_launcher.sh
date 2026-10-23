@@ -32,6 +32,7 @@ APP_PACK="$SCRIPT_DIR/setup-pack"
 DATA="$HOME/Library/Application Support/NVDEMU/Kirby Super Star Recomp"
 PROVENANCE="$APP_PACK/update/BUILD_PROVENANCE.json"
 MARKER="$DATA/.app-bundle-provenance.json"
+UPDATED=0
 
 [ -d "$APP_PACK" ] || fail "App resources do not contain setup-pack."
 [ -f "$PROVENANCE" ] || fail "Setup pack is missing update/BUILD_PROVENANCE.json."
@@ -58,7 +59,8 @@ if [ ! -f "$MARKER" ] || ! cmp -s "$MARKER" "$PROVENANCE"; then
     --exclude='/mods/installed/***' \
     "$APP_PACK/" "$DATA/" || fail "Could not install app resources into the writable setup folder."
   cp "$PROVENANCE" "$MARKER.tmp.$$" || fail "Could not write update marker."
-  mv -f "$MARKER.tmp.$$" "$MARKER" || fail "Could not activate update marker."
+  mv -f "$MARKER.tmp.$" "$MARKER" || fail "Could not activate update marker."
+  UPDATED=1
 fi
 
 HOST="$DATA/KirbySuperStarSNESRecomp"
@@ -70,6 +72,15 @@ if [ -f "$ANALYZER" ]; then
 fi
 
 cd "$DATA" || fail "Could not enter the writable setup folder."
+if [ "$UPDATED" -eq 1 ]; then
+  # Updating the framework/source pack must not silently hand off to an older
+  # playable binary in build/. Keep the setup UI available so the player can
+  # regenerate and rebuild with the updated runtime.
+  echo "Updated source pack detected; keeping the setup UI open for Generate & rebuild."
+  export SNESRECOMP_NO_HANDOFF=1
+  export SNESRECOMP_FORCE_SETUP=1
+fi
+
 echo "Launching setup host: $HOST"
 "$HOST" "$@"
 STATUS=$?

@@ -173,6 +173,7 @@ PACK="$APPDIR/usr/share/kirbysuperstar/setup-pack"
 DATA="$HOME/.local/share/NVDEMU/Kirby Super Star Recomp"
 MARKER="$DATA/.appimage-bundle-provenance.json"
 PROVENANCE="$PACK/update/BUILD_PROVENANCE.json"
+UPDATED=0
 LOG_DIR="$HOME/.local/state/NVDEMU/Kirby Super Star Recomp"
 mkdir -p "$LOG_DIR" || exit 1
 exec >>"$LOG_DIR/launcher.log" 2>&1
@@ -220,6 +221,7 @@ if [ ! -f "$MARKER" ] || ! cmp -s "$MARKER" "$PROVENANCE"; then
   fi
   cp "$PROVENANCE" "$MARKER.tmp.$" || fail "Could not write application update marker."
   mv -f "$MARKER.tmp.$" "$MARKER" || fail "Could not activate application update marker."
+  UPDATED=1
 fi
 
 HOST="$DATA/KirbySuperStarSNESRecomp"
@@ -232,6 +234,12 @@ fi
 
 export LD_LIBRARY_PATH="$APPDIR/usr/lib:$APPDIR/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 cd "$DATA" || fail "Could not enter the writable setup folder."
+if [ "$UPDATED" -eq 1 ]; then
+  # A refreshed source pack must not jump into the pre-update build/.
+  echo "Updated source pack detected; keeping the setup UI open for Generate & rebuild."
+  export SNESRECOMP_NO_HANDOFF=1
+  export SNESRECOMP_FORCE_SETUP=1
+fi
 echo "Launching setup host: $HOST"
 set +e
 "$HOST" "$@"

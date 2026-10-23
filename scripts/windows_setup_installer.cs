@@ -151,11 +151,16 @@ internal static class KirbySuperStarSetupInstaller
             }
             catch { }
 
-            Process launched = Process.Start(new ProcessStartInfo(executable)
+            ProcessStartInfo launchInfo = new ProcessStartInfo(executable)
             {
                 WorkingDirectory = target,
-                UseShellExecute = true
-            });
+                // We need a child-specific environment to keep the setup host
+                // from auto-handing-off to a previous build/ after an update.
+                UseShellExecute = false
+            };
+            launchInfo.EnvironmentVariables["SNESRECOMP_NO_HANDOFF"] = "1";
+            launchInfo.EnvironmentVariables["SNESRECOMP_FORCE_SETUP"] = "1";
+            Process launched = Process.Start(launchInfo);
             if (launched == null)
                 throw new InvalidOperationException("Windows did not return a process for the setup host.");
 
