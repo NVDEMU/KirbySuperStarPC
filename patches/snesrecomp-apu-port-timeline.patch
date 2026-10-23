@@ -1,9 +1,6 @@
 diff --git a/runner/src/snes/interp_bridge.h b/runner/src/snes/interp_bridge.h
 --- a/runner/src/snes/interp_bridge.h
 +++ b/runner/src/snes/interp_bridge.h
-@@ -126,1 +126,1 @@
-- * catch-up. SA-1 already uses absolute frame time. */
-+ * catch-up. SA-1 uses absolute sync only once APU port time is mapped. */
 @@ -129,3 +129,5 @@ static inline bool interp_bridge_use_absolute_apu_timeline(
 -    bool frame_timeline_active, bool is_sa1, bool mapped_extended_frame) {
 -  return frame_timeline_active && (is_sa1 || mapped_extended_frame);
