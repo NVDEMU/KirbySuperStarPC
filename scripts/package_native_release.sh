@@ -18,9 +18,24 @@ fi
 UNPACK="$WORK/unpacked"
 mkdir -p "$UNPACK"
 python3 - "$ZIP" "$UNPACK" <<'PY'
-import sys, zipfile
-with zipfile.ZipFile(sys.argv[1]) as zf:
-    zf.extractall(sys.argv[2])
+import os
+import sys
+import zipfile
+
+archive_path, destination = sys.argv[1:3]
+with zipfile.ZipFile(archive_path) as zf:
+    zf.extractall(destination)
+    # ZipFile.extractall() does not restore Unix execute bits. That leaves the
+    # setup executable and bundled compiler tools as non-executable files in
+    # the .app, so Finder launches an app that immediately exits. Restore the
+    # stored POSIX mode bits as part of native-app staging.
+    for member in zf.infolist():
+        mode = (member.external_attr >> 16) & 0o777
+        if not mode:
+            continue
+        target = os.path.join(destination, member.filename.replace("/", os.sep))
+        if os.path.exists(target):
+            os.chmod(target, mode)
 PY
 PACK="$UNPACK/kirbysuperstar-$VERSION-$PLATFORM"
 if [[ ! -d "$PACK" || -e "$PACK/rom.cfg" ]]; then
@@ -60,25 +75,24 @@ case "$PLATFORM" in
     mkdir -p "$MACOS" "$RESOURCES/setup-pack"
     cp -a "$PACK/." "$RESOURCES/setup-pack/"
 
-    # Copy into a writable per-user folder on first run or after a new app
-    # bundle is installed. A separate marker prevents an old app bundle from
-    # reverting a newer Nightly installed by the in-app updater.
-    cat > "$MACOS/KirbySuperStarRecomp" <<'APP_LAUNCHER'
-#!/bin/sh
-set -eu
-APP_PACK="$(cd "$(dirname "$0")/../Resources/setup-pack" && pwd)"
-DATA="$HOME/Library/Application Support/NVDEMU/Kirby Super Star Recomp"
-PROVENANCE="$APP_PACK/update/BUILD_PROVENANCE.json"
-MARKER="$DATA/.app-bundle-provenance.json"
-mkdir -p "$DATA"
-if [ ! -f "$MARKER" ] || ! cmp -s "$MARKER" "$PROVENANCE"; then
-  /usr/bin/ditto "$APP_PACK" "$DATA"
-  cp "$PROVENANCE" "$MARKER"
-fi
-cd "$DATA"
-exec "$DATA/KirbySuperStarSNESRecomp" "$@"
-APP_LAUNCHER
-    chmod +x "$MACOS/KirbySuperStarRecomp"
+    # Keep the script as a resource and make CFBundleExecutable a real Mach-O
+    # binary. LaunchServices/Finder does not reliably launch a shell script
+    # directly as CFBundleExecutable on current macOS.
+    cp "$ROOT/scripts/macos_app_launcher.sh" "$RESOURCES/launcher.sh"
+    chmod 644 "$RESOURCES/launcher.sh"
+    /usr/bin/clang -std=c11 -O2 -Wall -Wextra -Werror \
+      "$ROOT/scripts/macos_app_launcher.c" -o "$MACOS/KirbySuperStarRecomp"
+    chmod 755 "$MACOS/KirbySuperStarRecomp"
+    /bin/sh -n "$RESOURCES/launcher.sh"
+    file "$MACOS/KirbySuperStarRecomp" | grep -q 'Mach-O' || {
+      echo "::error::CFBundleExecutable is not a native Mach-O binary." >&2
+      exit 1
+    }
+    [[ -x "$RESOURCES/setup-pack/KirbySuperStarSNESRecomp" ]] || {
+      echo "::error::The setup-host executable lost its execute bit in the ZIP." >&2
+      ls -l "$RESOURCES/setup-pack/KirbySuperStarSNESRecomp" >&2 || true
+      exit 1
+    }
 
     APP_VERSION="$VERSION"
     if [[ ! "$APP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then APP_VERSION="0.0.0"; fi
