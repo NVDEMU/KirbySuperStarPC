@@ -1,0 +1,35 @@
+diff --git a/runner/src/snes/interp_bridge.h b/runner/src/snes/interp_bridge.h
+--- a/runner/src/snes/interp_bridge.h
++++ b/runner/src/snes/interp_bridge.h
+@@ -126,1 +126,1 @@
+- * catch-up. SA-1 already uses absolute frame time. */
++ * catch-up. SA-1 uses absolute sync only once APU port time is mapped. */
+@@ -129,3 +129,5 @@ static inline bool interp_bridge_use_absolute_apu_timeline(
+-    bool frame_timeline_active, bool is_sa1, bool mapped_extended_frame) {
+-  return frame_timeline_active && (is_sa1 || mapped_extended_frame);
++    bool frame_timeline_active, bool is_sa1, bool mapped_extended_frame,
++    bool apu_port_time_mapped) {
++  return frame_timeline_active &&
++         (is_sa1 ? apu_port_time_mapped : mapped_extended_frame);
+ }
+diff --git a/runner/src/snes/interp_bridge.c b/runner/src/snes/interp_bridge.c
+--- a/runner/src/snes/interp_bridge.c
++++ b/runner/src/snes/interp_bridge.c
+@@ -94,3 +94,4 @@ static void bridge_apu_flush(CpuState *cpu) {
+             g_snes && cart_has_sa1(g_snes->cart),
+             rtl_apu_extended_frame_timing() &&
+-            g_snes && g_snes->apu && g_snes->apu->portTimeValid)) {
++            g_snes && g_snes->apu && g_snes->apu->portTimeValid,
++            g_snes && g_snes->apu && g_snes->apu->portTimeValid)) {
+@@ -2100,3 +2101,4 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
+                                 !interp_bridge_use_absolute_apu_timeline(
+                                     rtl_apu_frame_timeline_active(),
+-                                    cart_has_sa1(g_snes->cart), false);
++                                    cart_has_sa1(g_snes->cart), false,
++                                    g_snes && g_snes->apu && g_snes->apu->portTimeValid);
+@@ -2709,3 +2711,4 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
+                     !interp_bridge_use_absolute_apu_timeline(
+                         rtl_apu_frame_timeline_active(),
+-                        g_snes && cart_has_sa1(g_snes->cart), false)) {
++                        g_snes && cart_has_sa1(g_snes->cart), false,
++                        g_snes && g_snes->apu && g_snes->apu->portTimeValid)) {

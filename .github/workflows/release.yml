@@ -371,6 +371,13 @@ jobs:
           fi
           JOBS="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
           bash tools/regen.sh --rom "$ROM"
+          # Fail closed if generation produces the old zero-AOT seed build.
+          if ! grep -Eq '^RecompReturn I_RESET_M[01]X[01]\(' recomp/funcs.h || \
+             ! grep -Eq 'I_RESET_M[01]X[01]\(' src/gen/bank00_v2.c; then
+            echo "::error::ROM generation did not emit Kirby's I_RESET AOT variants."
+            sed -n '1,120p' recomp/funcs.h || true
+            exit 1
+          fi
           cmake -S . -B build-playable -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DSNESRECOMP_SETUP_HOST=OFF \
@@ -429,6 +436,40 @@ jobs:
             echo "::error::Playable binary did not produce its requested rendered-frame screenshot."
             exit 1
           fi
+          # A mostly-black Nintendo logo can be valid; check guest/APU/PPU
+          # progression separately rather than relying on colored-pixel counts.
+          python3 - "$SMOKE/game.log" <<'PY_BOOT'
+          from pathlib import Path
+          import re
+          import sys
+
+          log = Path(sys.argv[1]).read_text(errors="replace")
+          match = re.search(
+              r"\[kirby_boot\] final frame=3600 resume_pc=([0-9A-Fa-f]{6}) "
+              r"INIDISP=([0-9A-Fa-f]{2}) TM=([0-9A-Fa-f]{2}) TS=([0-9A-Fa-f]{2}) "
+              r"SPC_PC=([0-9A-Fa-f]{4}) IPL_ROM=(\d+) portTimeValid=(\d+) "
+              r"OUT=([0-9A-Fa-f]{2}),([0-9A-Fa-f]{2}),([0-9A-Fa-f]{2}),([0-9A-Fa-f]{2})",
+              log,
+          )
+          if not match:
+              raise SystemExit("::error::Missing final CPU/APU/PPU boot checkpoint.")
+          pc, inidisp, tm, ts, spc_pc, ipl_rom, port_mapped, *out_ports = match.groups()
+          pc, inidisp, tm, ts, spc_pc, ipl_rom = (
+              int(pc, 16), int(inidisp, 16), int(tm, 16), int(ts, 16),
+              int(spc_pc, 16), int(ipl_rom)
+          )
+          print(f"Boot checkpoint: CPU continuation={pc:06X}, INIDISP={inidisp:02X}, "
+                f"TM/TS={tm:02X}/{ts:02X}, SPC PC={spc_pc:04X}, IPL mapped={ipl_rom}, "
+                f"APU port-time mapped={port_mapped}, APU out={','.join(out_ports)}")
+          if 0x00D5E9 <= pc <= 0x00D5FF:
+              raise SystemExit("::error::CPU is still in the $00:D5E9 APU-upload wait loop at frame 3600.")
+          if (tm | ts) == 0 or (inidisp & 0x80):
+              raise SystemExit("::error::PPU has no enabled screen layer or remains forced blank at frame 3600.")
+          if spc_pc == 0xFFD2 and ipl_rom:
+              raise SystemExit("::error::SPC is still waiting in the APU IPL ROM at frame 3600.")
+          print("Boot-state smoke test passed.")
+          PY_BOOT
+
           python3 - "$SMOKE/frame.ppm" <<'PY_SMOKE'
           from pathlib import Path
           import re
@@ -451,16 +492,42 @@ jobs:
           triples = zip(pixels[0::3], pixels[1::3], pixels[2::3])
           nonblack = 0
           colors = set()
-          for r, g, b in triples:
+          min_x, min_y, max_x, max_y = width, height, -1, -1
+          blue_pixels = green_pixels = white_pixels = 0
+          for index, (r, g, b) in enumerate(triples):
               colors.add((r, g, b))
-              nonblack += (r > 8 or g > 8 or b > 8)
+              if r > 8 or g > 8 or b > 8:
+                  nonblack += 1
+                  x = index % width
+                  y = index // width
+                  min_x, min_y = min(min_x, x), min(min_y, y)
+                  max_x, max_y = max(max_x, x), max(max_y, y)
+                  # Tolerant color families for the mostly-black Nintendo
+                  # logo: green, blue, and bright neutral/white artwork.
+                  if b > 32 and b > r * 1.18 and b > g * 1.08:
+                      blue_pixels += 1
+                  if g > 32 and g > r * 1.15 and g > b * 1.05:
+                      green_pixels += 1
+                  if min(r, g, b) > 150 and max(r, g, b) - min(r, g, b) < 100:
+                      white_pixels += 1
           ratio = nonblack / (width * height)
-          print(f"Headless render: {width}x{height}; nonblack pixels={nonblack} ({ratio:.1%}); distinct colors={len(colors)}")
-          if nonblack < 1000 or ratio < 0.01 or len(colors) < 8:
+          box_w = max_x - min_x + 1 if max_x >= min_x else 0
+          box_h = max_y - min_y + 1 if max_y >= min_y else 0
+          print(
+              f"Headless render: {width}x{height}; nonblack={nonblack} ({ratio:.1%}); "
+              f"colors={len(colors)}; art bounds={box_w}x{box_h}; "
+              f"blue/green/white={blue_pixels}/{green_pixels}/{white_pixels}"
+          )
+          # A valid logo can be mostly black; don't demand a bright/full-screen
+          # image. But reject scattered specks and empty frames: the artwork
+          # must cover a meaningful region and include all three logo color families.
+          if (nonblack < 600 or ratio < 0.01 or len(colors) < 4
+                  or box_w < width * 0.25 or box_h < height * 0.08
+                  or blue_pixels < 25 or green_pixels < 25 or white_pixels < 25):
               raise SystemExit(
-                  "::error::Black/near-empty rendered frame detected; refusing to package or publish this build."
+                  "::error::Frame lacks spatially meaningful green/blue/white logo or game artwork."
               )
-          print("Headless render smoke test passed: captured a nonblack, nontrivial frame.")
+          print("Rendered artwork check passed; completed boot-state validation was also required.")
           PY_SMOKE
 
           rm -f "$ROM"
