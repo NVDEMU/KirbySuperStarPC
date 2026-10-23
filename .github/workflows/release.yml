@@ -402,31 +402,39 @@ jobs:
         with:
           path: artifacts
 
-      - name: Collect zips and generate updater metadata
+      - name: Collect setup/native packages and updater metadata
         env:
           RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
           RELEASE_TAG_NAME: ${{ needs.preflight.outputs.tag }}
         run: |
           set -euo pipefail
           mkdir -p dist
-          find artifacts -type f -name "${ZIP_PREFIX}-*.zip" -exec cp -v {} dist/ \;
-          count="$(find dist -maxdepth 1 -name "${ZIP_PREFIX}-*.zip" | wc -l | tr -d ' ')"
-          if [[ "${count}" -ne 4 ]]; then
-            echo "::error::expected 4 platform zips, found ${count}"
-            ls -la dist
-            exit 1
-          fi
-          ( cd dist && sha256sum "${ZIP_PREFIX}"-*.zip > SHA256SUMS )
+          find artifacts -type f \\( \
+            -name 'kirbysuperstar-*.zip' -o \
+            -name 'kirbysuperstar-*.exe' -o \
+            -name 'kirbysuperstar-*.dmg' -o \
+            -name 'kirbysuperstar-*.AppImage' \\) -exec cp -v {} dist/ \\;
+
+          # The updater consumes these exact four portable setup-pack names.
           for platform in linux-x64 windows-x64 macos-arm64 macos-x64; do
-            filename="${ZIP_PREFIX}-${RELEASE_VERSION}-${platform}.zip"
+            filename="kirbysuperstar-${RELEASE_VERSION}-${platform}.zip"
             if [[ ! -f "dist/${filename}" ]]; then
               echo "::error::missing updater package dist/${filename}"
-              ls -la dist
+              ls -la dist/
               exit 1
             fi
-            ( cd dist && sha256sum "${filename}" > "SHA256SUMS-${platform}.txt" )
+            (cd dist && sha256sum "${filename}" > "SHA256SUMS-${platform}.txt")
           done
-          python - <<'PY'
+
+          # Native wrappers are additional manual-download assets.
+          test -s "dist/kirbysuperstar-${RELEASE_VERSION}-windows-x64.exe"
+          test -s "dist/kirbysuperstar-${RELEASE_VERSION}-linux-x64.AppImage"
+          for platform in macos-arm64 macos-x64; do
+            test -s "dist/kirbysuperstar-${RELEASE_VERSION}-${platform}.dmg"
+            test -s "dist/kirbysuperstar-${RELEASE_VERSION}-${platform}-app.zip"
+          done
+
+          python3 - <<'PY'
           import json
           import os
           from pathlib import Path
@@ -445,13 +453,21 @@ jobs:
                   "macos-arm64": f"kirbysuperstar-{version}-macos-arm64.zip",
                   "macos-x64": f"kirbysuperstar-{version}-macos-x64.zip",
               },
+              "native_assets": {
+                  "windows-x64": f"kirbysuperstar-{version}-windows-x64.exe",
+                  "linux-x64": f"kirbysuperstar-{version}-linux-x64.AppImage",
+                  "macos-arm64": f"kirbysuperstar-{version}-macos-arm64.dmg",
+                  "macos-x64": f"kirbysuperstar-{version}-macos-x64.dmg",
+              },
           }
           Path("dist/nightly-manifest.json").write_text(
-              json.dumps(metadata, indent=2) + "\n", encoding="utf-8"
+              json.dumps(metadata, indent=2) + "\\n", encoding="utf-8"
           )
-          print(f"Generated checksums and manifest for {tag}")
+          print(f"Generated checksum files and updater metadata for {tag}")
           PY
-          cat dist/SHA256SUMS
+
+          # Overall SHA256SUMS covers all public platform assets and metadata.
+          (cd dist && sha256sum kirbysuperstar-* nightly-manifest.json > SHA256SUMS)
 
       # The tag is created here, after all four builds succeeded, so a failed
       # build never leaves a version number claimed by nothing.
@@ -485,22 +501,20 @@ jobs:
           TAG: ${{ needs.preflight.outputs.tag }}
         run: |
           set -euo pipefail
-          # From rom_identity.txt, not a copy baked into this workflow.
           ROM_FILE="$(python3 snesrecomp/tools/rom_identity.py rom_identity.txt --get rom_file)"
           ROM_SHA256="$(python3 snesrecomp/tools/rom_identity.py rom_identity.txt --get expected_sha256)"
           {
-            echo "Kirby Super Star ${TAG} — setup packs"
+            echo "Kirby Super Star Recomp ${TAG}"
             echo
-            echo "These packs do not contain the game. Each holds a setup program, the"
-            echo "recompiler and the source; on first run it takes your own copy of"
-            echo "${ROM_FILE} (SHA-256 ${ROM_SHA256}), recompiles it locally, and builds"
-            echo "the playable game. No ROM data is included or downloaded."
+            echo "This release contains setup packs and native launch wrappers, not a prebuilt game."
+            echo "On first launch, choose your own ${ROM_FILE} (SHA-256 ${ROM_SHA256}), then select"
+            echo "Generate & rebuild. No ROM image or ROM-derived generated code is shipped."
             echo
-            if [[ "${{ inputs.embed_toolchain }}" != "false" ]]; then
-              echo "The portable build tools (cmake-clang-v1) are embedded in every pack."
-            else
-              echo "The portable build tools (cmake-clang-v1) are downloaded on first run."
-            fi
+            echo "The Windows EXE is a self-contained setup installer. The macOS DMG contains a"
+            echo "real .app bundle. The Linux AppImage initializes a writable per-user setup folder."
+            echo "Your ROM path cache is created locally and is never included in release assets."
+            echo
+            echo "The portable ZIP is the updater payload, with a per-platform SHA-256 file."
             echo
             echo '### Framework revisions'
             echo
@@ -520,7 +534,7 @@ jobs:
           overwrite_files: true
           body_path: notes.md
           files: |
-            dist/${{ env.ZIP_PREFIX }}-*.zip
+            dist/${{ env.ZIP_PREFIX }}-*
             dist/SHA256SUMS
             dist/SHA256SUMS-*.txt
             dist/nightly-manifest.json
