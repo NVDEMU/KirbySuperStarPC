@@ -165,21 +165,83 @@ PLIST
     chmod +x "$APPDIR/usr/bin/KirbySuperStarSNESRecomp"
 
     cat > "$APPDIR/AppRun" <<'APP_RUN'
-#!/bin/sh
-set -eu
-APPDIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+#!/bin/bash
+set -euo pipefail
+
+APPDIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
 PACK="$APPDIR/usr/share/kirbysuperstar/setup-pack"
 DATA="$HOME/.local/share/NVDEMU/Kirby Super Star Recomp"
 MARKER="$DATA/.appimage-bundle-provenance.json"
 PROVENANCE="$PACK/update/BUILD_PROVENANCE.json"
-mkdir -p "$DATA"
+LOG_DIR="$HOME/.local/state/NVDEMU/Kirby Super Star Recomp"
+mkdir -p "$LOG_DIR" || exit 1
+exec >>"$LOG_DIR/launcher.log" 2>&1
+echo
+echo "===== Kirby Super Star Recomp AppImage: $(date) ====="
+
+fail() {
+  echo "ERROR: $*" >&2
+  if command -v zenity >/dev/null 2>&1; then
+    zenity --error --title="Kirby Super Star Recomp" --text="$*" >/dev/null 2>&1 || true
+  elif command -v kdialog >/dev/null 2>&1; then
+    kdialog --error "$*" --title "Kirby Super Star Recomp" >/dev/null 2>&1 || true
+  elif command -v notify-send >/dev/null 2>&1; then
+    notify-send "Kirby Super Star Recomp could not start" "$*" >/dev/null 2>&1 || true
+  fi
+  exit 1
+}
+
+[ -d "$PACK" ] || fail "The AppImage is missing its setup-pack resources."
+[ -f "$PROVENANCE" ] || fail "The setup pack is missing its provenance metadata."
+mkdir -p "$DATA" || fail "Could not create the writable setup folder."
+
 if [ ! -f "$MARKER" ] || ! cmp -s "$MARKER" "$PROVENANCE"; then
-  cp -a "$PACK/." "$DATA/"
-  cp "$PROVENANCE" "$MARKER"
+  echo "Syncing application files into: $DATA (preserving local ROM and player data)"
+  # Stream tar directly between processes: unlike cp -a, this excludes local
+  # user state while still replacing shipped application files for new builds.
+  # No giant temporary archive is written to the user's disk.
+  if ! tar -C "$PACK" \
+    --exclude='./rom.cfg' \
+    --exclude='./config.ini' \
+    --exclude='./keybinds.ini' \
+    --exclude='./input.ini' \
+    --exclude='./controller.ini' \
+    --exclude='./settings.toml' \
+    --exclude='./game_options.toml' \
+    --exclude='./saves' \
+    --exclude='./build' \
+    --exclude='./src/gen' \
+    --exclude='./recomp/funcs.h' \
+    --exclude='./mods/state.toml' \
+    --exclude='./mods/custom' \
+    --exclude='./mods/installed' \
+    -cf - . | tar -C "$DATA" -xf -; then
+    fail "Could not install the AppImage's files. See $LOG_DIR/launcher.log."
+  fi
+  cp "$PROVENANCE" "$MARKER.tmp.$" || fail "Could not write application update marker."
+  mv -f "$MARKER.tmp.$" "$MARKER" || fail "Could not activate application update marker."
 fi
-export LD_LIBRARY_PATH="$APPDIR/usr/lib:$APPDIR/usr/lib/x86_64-linux-gnu"
-cd "$DATA"
-exec "$DATA/KirbySuperStarSNESRecomp" "$@"
+
+HOST="$DATA/KirbySuperStarSNESRecomp"
+[ -f "$HOST" ] || fail "Setup-host executable is missing at $HOST."
+chmod u+x "$HOST" || fail "Could not mark setup-host executable as runnable."
+ANALYZER="$DATA/snesrecomp/recompiler-rs/target/release/snesrecomp-analyze"
+if [ -f "$ANALYZER" ]; then
+  chmod u+x "$ANALYZER" || fail "Could not mark the bundled analyzer as runnable."
+fi
+
+export LD_LIBRARY_PATH="$APPDIR/usr/lib:$APPDIR/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+cd "$DATA" || fail "Could not enter the writable setup folder."
+echo "Launching setup host: $HOST"
+set +e
+"$HOST" "$@"
+STATUS=$?
+set -e
+echo "Setup host exited with status $STATUS."
+if [ "$STATUS" -ne 0 ]; then
+  fail "Setup host exited with code $STATUS. See $LOG_DIR/launcher.log."
+fi
+exit 0
 APP_RUN
     chmod +x "$APPDIR/AppRun"
 
