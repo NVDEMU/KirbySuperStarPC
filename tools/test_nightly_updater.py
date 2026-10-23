@@ -2,6 +2,7 @@
 """Offline safety tests for Kirby Super Star Recomp's Nightly updater."""
 import importlib.util
 import json
+import os
 from pathlib import Path
 import ssl
 import tempfile
@@ -73,7 +74,8 @@ class NightlyUpdaterTests(unittest.TestCase):
             root = Path(temp)
             installed = root / "installed"
             installed.mkdir()
-            (installed / "KirbySuperStarSNESRecomp").write_text("old setup host", encoding="utf-8")
+            executable_name = "KirbySuperStarSNESRecomp" + (".exe" if os.name == "nt" else "")
+            (installed / executable_name).write_text("old setup host", encoding="utf-8")
             (installed / "rom.cfg").write_text("/Users/player/Kirby Super Star (USA).sfc\n", encoding="utf-8")
             (installed / "config.ini").write_text("[KeyMap]\nstart = Return\n", encoding="utf-8")
             (installed / "mods").mkdir()
@@ -88,7 +90,7 @@ class NightlyUpdaterTests(unittest.TestCase):
             archive_path = root / "nightly.zip"
             with zipfile.ZipFile(archive_path, "w") as archive:
                 package = "kirbysuperstar-Nightly-linux-x64"
-                archive.writestr(package + "/KirbySuperStarSNESRecomp", "new setup host")
+                archive.writestr(package + "/" + executable_name, "new setup host")
                 archive.writestr(package + "/README.txt", "new release")
                 archive.writestr(package + "/rom.cfg", "/default/rom.sfc\n")
                 archive.writestr(package + "/config.ini", "new defaults\n")
@@ -99,7 +101,7 @@ class NightlyUpdaterTests(unittest.TestCase):
                 archive.writestr(package + "/update/BUILD_PROVENANCE.json", json.dumps({"commit": "a" * 40}))
 
             UPDATER.install_setup_pack(archive_path, installed, root / "staging")
-            self.assertEqual((installed / "KirbySuperStarSNESRecomp").read_text(), "new setup host")
+            self.assertEqual((installed / executable_name).read_text(), "new setup host")
             self.assertEqual((installed / "README.txt").read_text(), "new release")
             self.assertEqual((installed / "rom.cfg").read_text(), "/Users/player/Kirby Super Star (USA).sfc\n")
             self.assertEqual((installed / "config.ini").read_text(), "[KeyMap]\nstart = Return\n")
