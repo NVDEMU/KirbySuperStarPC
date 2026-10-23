@@ -113,7 +113,7 @@ static void kirby_dump_wait_loop(void)
 
 static void kirby_boot_trace(unsigned frame, const char *phase)
 {
-    if (getenv("SNESRECOMP_KIRBY_BOOT_TRACE") == NULL || frame > 12)
+    if (getenv("SNESRECOMP_KIRBY_BOOT_TRACE") == NULL || (frame > 12 && frame != 3600))
         return;
 
     fprintf(stderr,
@@ -125,6 +125,26 @@ static void kirby_boot_trace(unsigned frame, const char *phase)
             (unsigned)g_cpu.S, (unsigned)g_cpu.D, (unsigned)g_cpu.DB,
             (unsigned)g_cpu.PB, (unsigned)g_cpu.P,
             (unsigned long long)g_cpu.master_cycles);
+
+    /* A valid Nintendo logo can be mostly black, so the release smoke test
+     * also inspects CPU/APU/PPU progress at the end of its 3,600-frame run. */
+    if (phase[0] == 'a' && frame == 3600 && g_snes) {
+        fprintf(stderr,
+                "[kirby_boot] final frame=%u resume_pc=%06X "
+                "INIDISP=%02X TM=%02X TS=%02X SPC_PC=%04X IPL_ROM=%u "
+                "portTimeValid=%u OUT=%02X,%02X,%02X,%02X\n",
+                frame, (unsigned)interp_bridge_lle_resume_pc(),
+                (unsigned)(g_snes->ppu ? g_snes->ppu->inidisp : 0),
+                (unsigned)(g_snes->ppu ? g_snes->ppu->screenEnabled[0] : 0),
+                (unsigned)(g_snes->ppu ? g_snes->ppu->screenEnabled[1] : 0),
+                (unsigned)(g_snes->apu && g_snes->apu->spc ? g_snes->apu->spc->pc : 0),
+                (unsigned)(g_snes->apu ? g_snes->apu->romReadable : 0),
+                (unsigned)(g_snes->apu ? g_snes->apu->portTimeValid : 0),
+                (unsigned)(g_snes->apu ? g_snes->apu->outPorts[0] : 0),
+                (unsigned)(g_snes->apu ? g_snes->apu->outPorts[1] : 0),
+                (unsigned)(g_snes->apu ? g_snes->apu->outPorts[2] : 0),
+                (unsigned)(g_snes->apu ? g_snes->apu->outPorts[3] : 0));
+    }
 
     if (phase[0] == 'a' && frame == 1)
         kirby_dump_wait_loop();
