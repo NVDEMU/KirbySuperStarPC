@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Build native playable release packages from an already configured playable build.
 set -euo pipefail
-ROOT="$(cd "$(dirname "\${BASH_SOURCE[0]}")/.." && pwd -P)"
-BUILD_ARG="\${1:-build-playable}"
-PLATFORM="\${2:?usage: package_playable_release.sh BUILD_DIR PLATFORM VERSION}"
-VERSION="\${3:?usage: package_playable_release.sh BUILD_DIR PLATFORM VERSION}"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+BUILD_ARG="${1:-build-playable}"
+PLATFORM="${2:?usage: package_playable_release.sh BUILD_DIR PLATFORM VERSION}"
+VERSION="${3:?usage: package_playable_release.sh BUILD_DIR PLATFORM VERSION}"
 if [[ "$BUILD_ARG" = /* ]]; then BUILD_DIR="$(cd "$BUILD_ARG" && pwd -P)"; else BUILD_DIR="$(cd "$ROOT/$BUILD_ARG" && pwd -P)"; fi
 CACHE="$BUILD_DIR/CMakeCache.txt"
 [[ -f "$CACHE" ]] || { echo "error: missing CMake cache: $CACHE" >&2; exit 1; }
