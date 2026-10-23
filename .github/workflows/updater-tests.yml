@@ -37,6 +37,10 @@ jobs:
 
       - name: Check release packager shell syntax
         run: bash -n scripts/package_release.sh scripts/package_native_release.sh scripts/macos_app_launcher.sh scripts/package_playable_macos_app.sh scripts/package_playable_release.sh
+        shell: bash
+
+      - name: Check MEGA downloader syntax
+        run: node --check scripts/download_mega_rom.cjs
 
       - name: Parse release workflow YAML
         run: ruby -e 'require "yaml"; YAML.load_file(".github/workflows/release.yml"); puts "release workflow YAML parsed"'
