@@ -149,6 +149,21 @@ if(NOT EXISTS "${RECOMP_UI_ROOT}/recomp_ui.cmake")
         "recomp-ui missing at ${RECOMP_UI_ROOT}.\n"
         "Run: git submodule update --init --recursive recomp-ui")
 endif()
+
+# Add the title-owned Nightly update action to the shared launcher. The patch
+# is guarded and idempotent; the shared recomp-ui submodule remains untouched
+# in git and is patched only in this build checkout.
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+execute_process(
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_SOURCE_DIR}/tools/apply_kirby_updater_patch.py"
+            --ui-root "${RECOMP_UI_ROOT}"
+    RESULT_VARIABLE _kirby_updater_patch_result)
+if(NOT "${_kirby_updater_patch_result}" STREQUAL "0")
+    message(FATAL_ERROR
+        "Could not add the Kirby Nightly updater to recomp-ui. "
+        "See tools/apply_kirby_updater_patch.py output.")
+endif()
 include(${RECOMP_UI_ROOT}/recomp_ui.cmake)
 # BOXART stages launcher_assets/img/boxart.tga beside the exe; the launcher
 # shows assets/img/boxart.tga by default. EXISTS-guarded in recomp_ui.cmake,
@@ -169,3 +184,14 @@ target_include_directories(KirbySuperStarSNESRecomp PRIVATE
 
 snesrecomp_enable_recomp_net(KirbySuperStarSNESRecomp)
 # No multitap: two seats, one controller per port.
+
+# Keep the project-owned updater helper beside the built executable. The
+# release packager adds provenance + a verified CA bundle to this same folder.
+add_custom_command(TARGET KirbySuperStarSNESRecomp POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:KirbySuperStarSNESRecomp>/update"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/tools/in_app_updater.py"
+            "$<TARGET_FILE_DIR:KirbySuperStarSNESRecomp>/update/updater.py"
+    COMMENT "Staging Kirby Nightly updater helper"
+    VERBATIM)

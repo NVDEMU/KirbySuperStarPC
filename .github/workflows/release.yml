@@ -1,39 +1,23 @@
-# Build the Kirby Super Star SETUP PACK for Linux, Windows, macOS
-# arm64 and macOS Intel, tag the commit, and publish the four zips as a
-# GitHub Release.
+# Build Kirby Super Star setup packs for four platforms.
 #
-# HUMAN-TRIGGERED ONLY. There is no push, pull_request or schedule trigger and
-# there must never be one: a run is a release decision, made by a person on
-# the Actions page. Releases across the port set are driven from the studio
-# bulk tool, and a per-push run would compete with it for minutes and for the
-# meaning of "did CI pass".
+# Manual dispatch makes versioned vX.Y.Z releases. Commits to main publish the
+# stable-name Nightly release used by the in-app updater. A Nightly contains a
+# setup host plus source and portable build tools; players generate the game
+# locally from their own ROM. No ROM or generated ROM-derived C is distributed.
 #
-# WHAT A RUN DOES, with the defaults:
-#   1. Picks the next version: the latest v* tag with its patch number bumped
-#      (or VERSION when there is no tag yet, or whatever `version` says).
-#   2. Builds the setup host for all four platforms with that version as the
-#      lobby pin, and packages it.
-#   3. Tags the commit the run was started from as vX.Y.Z and publishes a
-#      public GitHub Release with the four zips. Uncheck publish_release for a
-#      dry run that only uploads workflow artifacts.
+# Nightly assets are overwritten in place. Their SHA-256 files and
+# nightly-manifest.json are consumed by tools/in_app_updater.py.
 #
-# WHAT THIS BUILDS. Not the game. src/gen/*.c is recompiler output derived
-# from ROM bytes: never committed, never in CI, never in a zip. What CI can
-# honestly produce is the SETUP HOST -- the same executable built with
-# -DSNESRECOMP_SETUP_HOST=ON, i.e. without recompiled code -- packaged with
-# the recompiler and this source tree. On the player's machine the launcher
-# takes their own ROM, generates, rebuilds, and relaunches into the real game.
-#
-# THE TOOLCHAIN. Each pack is built with the retcomm-toolchains cmake-clang-v1
-# pack, because that is what the player's own rebuild uses: if it cannot build
-# this game, CI is where that must fail. By default the pack is embedded in
-# the zip (embed_toolchain) so first run downloads nothing; turn it off for a
-# lean zip that fetches the pack on demand (Linux pack ~800 MB, Windows
-# ~200 MB, macOS ~90 MB).
+# The toolchain is embedded by default so the first run needs no tool download.
 
 name: Release
 
 on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
   workflow_dispatch:
     inputs:
       publish_release:
@@ -62,9 +46,11 @@ on:
         type: boolean
         default: false
 
+# Serialize each ref like the Worms workflow: don't let overlapping pushes
+# race while the Nightly tag and release assets are replaced.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: kirby-release-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -105,6 +91,15 @@ jobs:
           IN_PUBLISH: ${{ inputs.publish_release }}
         run: |
           set -euo pipefail
+          # Pushes to main publish the rolling Nightly. Workflow dispatches
+          # remain deliberate, versioned releases or dry runs.
+          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF_TYPE}" == "branch" ]]; then
+            echo "version=Nightly" >>"$GITHUB_OUTPUT"
+            echo "tag=Nightly" >>"$GITHUB_OUTPUT"
+            echo "publish=true" >>"$GITHUB_OUTPUT"
+            echo "publishing Nightly from ${GITHUB_SHA::12}"
+            exit 0
+          fi
           PUBLISH=true
           [[ "${IN_PUBLISH}" == "false" ]] && PUBLISH=false
           FILE_VER="$(tr -d '[:space:]' < VERSION)"
@@ -189,6 +184,35 @@ jobs:
           submodules: recursive
           fetch-depth: 1
 
+      # The framework can copy root rom.cfg beside the executable. This ignored
+      # file stores an absolute path on one machine; never let it reach release CI.
+      - name: Reject local-only ROM data and clear ROM path cache
+        run: |
+          set -euo pipefail
+          if git ls-files --error-unmatch -- rom.cfg >/dev/null 2>&1; then
+            echo "::error::rom.cfg is tracked; it can leak a machine-specific disc path."
+            exit 1
+          fi
+          BAD_ROMS="$(git ls-files -- '*.sfc' '*.smc' '*.srm' '*.fig' || true)"
+          if [[ -n "${BAD_ROMS}" ]]; then
+            echo "::error::ROM or memory-card files are tracked:"
+            printf '%s\n' "${BAD_ROMS}"
+            exit 1
+          fi
+          rm -f rom.cfg build-ci/rom.cfg
+          echo "No tracked ROM images or local ROM-path cache."
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Test updater safety
+        run: |
+          set -euo pipefail
+          python -m py_compile tools/in_app_updater.py tools/test_nightly_updater.py tools/apply_kirby_updater_patch.py
+          python tools/test_nightly_updater.py
+          bash -n scripts/package_release.sh scripts/package_native_release.sh
+
       - name: Record framework pins
         run: bash snesrecomp/tools/ci/record_pins.sh
 
@@ -257,6 +281,8 @@ jobs:
             -DSNESRECOMP_BUILD_VERSION="${RELEASE_VERSION}" \
             "${EXTRA[@]+"${EXTRA[@]}"}"
           cmake --build build-ci -j"${JOBS}" --target "${EXE_NAME}"
+          # Remove any cache created by a future framework post-build change.
+          rm -f rom.cfg build-ci/rom.cfg
 
       - name: Package setup pack
         run: |
@@ -272,12 +298,86 @@ jobs:
           bash scripts/package_release.sh build-ci "${{ matrix.artifact }}" "${ARGS[@]+"${ARGS[@]}"}"
           ls -la dist/
 
+      # Verify the actual ZIP as a separate step, like Worms' package checks.
+      - name: Verify setup pack contents
+        env:
+          PLATFORM: ${{ matrix.artifact }}
+        run: |
+          set -euo pipefail
+          ZIP="dist/kirbysuperstar-${RELEASE_VERSION}-${PLATFORM}.zip"
+          python3 - "${ZIP}" <<'PY'
+          from pathlib import PurePosixPath
+          import sys
+          import zipfile
+
+          archive_path = sys.argv[1]
+          with zipfile.ZipFile(archive_path) as zf:
+              names = zf.namelist()
+              paths = [PurePosixPath(name) for name in names]
+              bad = []
+              for name, path in zip(names, paths):
+                  parts = path.parts
+                  if path.name.lower() == "rom.cfg":
+                      bad.append(f"machine-specific ROM path cache: {name}")
+                  if path.suffix.lower() in {".sfc", ".smc", ".srm", ".fig"}:
+                      bad.append(f"ROM or memory-card data: {name}")
+                  if path.suffix.lower() == ".c" and len(parts) >= 3 and parts[-3:-1] == ("src", "gen"):
+                      bad.append(f"generated ROM-derived C: {name}")
+                  if parts[-2:] == ("recomp", "funcs.h"):
+                      bad.append(f"generated ROM-derived header: {name}")
+                  if parts[-2:] == ("mods", "state.toml"):
+                      bad.append(f"per-machine mod state: {name}")
+                  if ".git" in parts:
+                      bad.append(f"Git metadata: {name}")
+              for required in ("CMakeLists.txt", "rom_identity.txt", "README.txt"):
+                  if not any(path.name == required for path in paths):
+                      bad.append(f"missing required setup file: {required}")
+              for required in ("updater.py", "cacert.pem", "BUILD_PROVENANCE.json"):
+                  if not any(path.name == required and path.parent.name == "update" for path in paths):
+                      bad.append(f"missing updater runtime file: update/{required}")
+              if bad:
+                  for item in bad:
+                      print(f"::error::{item}", file=sys.stderr)
+                  raise SystemExit("Refusing to publish this setup pack.")
+              print(f"Verified {archive_path}: no rom.cfg, ROM images, generated code, or per-machine state.")
+          PY
+
+      - name: Package Windows setup installer
+        if: matrix.artifact == 'windows-x64'
+        run: bash scripts/package_native_release.sh "${{ matrix.artifact }}" "${RELEASE_VERSION}"
+
+      - name: Package macOS app and DMG
+        if: startsWith(matrix.artifact, 'macos-')
+        run: bash scripts/package_native_release.sh "${{ matrix.artifact }}" "${RELEASE_VERSION}"
+
+      - name: Package Linux AppImage
+        if: matrix.artifact == 'linux-x64'
+        run: bash scripts/package_native_release.sh "${{ matrix.artifact }}" "${RELEASE_VERSION}"
+
+      - name: Verify native outputs
+        env:
+          PLATFORM: ${{ matrix.artifact }}
+        run: |
+          set -euo pipefail
+          case "${PLATFORM}" in
+            windows-x64) test -s "dist/kirbysuperstar-${RELEASE_VERSION}-windows-x64.exe" ;;
+            macos-arm64|macos-x64)
+              test -s "dist/kirbysuperstar-${RELEASE_VERSION}-${PLATFORM}.dmg"
+              test -s "dist/kirbysuperstar-${RELEASE_VERSION}-${PLATFORM}-app.zip"
+              ;;
+            linux-x64) test -s "dist/kirbysuperstar-${RELEASE_VERSION}-linux-x64.AppImage" ;;
+          esac
+
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ZIP_PREFIX }}-${{ matrix.artifact }}
-          path: dist/${{ env.ZIP_PREFIX }}-*-${{ matrix.artifact }}.zip
+          path: |
+            dist/${{ env.ZIP_PREFIX }}-*-${{ matrix.artifact }}*.zip
+            dist/${{ env.ZIP_PREFIX }}-*-${{ matrix.artifact }}.exe
+            dist/${{ env.ZIP_PREFIX }}-*-${{ matrix.artifact }}.dmg
+            dist/${{ env.ZIP_PREFIX }}-*-${{ matrix.artifact }}.AppImage
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30
           compression-level: 0
 
   release:
@@ -298,25 +398,86 @@ jobs:
         with:
           path: artifacts
 
-      - name: Collect zips
+      - name: Collect setup/native packages and updater metadata
+        env:
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+          RELEASE_TAG_NAME: ${{ needs.preflight.outputs.tag }}
         run: |
           set -euo pipefail
           mkdir -p dist
-          find artifacts -type f -name "${ZIP_PREFIX}-*.zip" -exec cp -v {} dist/ \;
-          # Four platforms in, four zips out. A release that silently carries
-          # three is the failure this counts for.
-          count="$(find dist -name "${ZIP_PREFIX}-*.zip" | wc -l | tr -d ' ')"
-          if [[ "${count}" -ne 4 ]]; then
-            echo "::error::expected 4 platform zips, found ${count}"
-            ls -la dist
-            exit 1
-          fi
-          ( cd dist && sha256sum "${ZIP_PREFIX}"-*.zip > SHA256SUMS )
-          cat dist/SHA256SUMS
+          find artifacts -type f \\( \
+            -name 'kirbysuperstar-*.zip' -o \
+            -name 'kirbysuperstar-*.exe' -o \
+            -name 'kirbysuperstar-*.dmg' -o \
+            -name 'kirbysuperstar-*.AppImage' \\) -exec cp -v {} dist/ \\;
+
+          # The updater consumes these exact four portable setup-pack names.
+          for platform in linux-x64 windows-x64 macos-arm64 macos-x64; do
+            filename="kirbysuperstar-${RELEASE_VERSION}-${platform}.zip"
+            if [[ ! -f "dist/${filename}" ]]; then
+              echo "::error::missing updater package dist/${filename}"
+              ls -la dist/
+              exit 1
+            fi
+            (cd dist && sha256sum "${filename}" > "SHA256SUMS-${platform}.txt")
+          done
+
+          # Native wrappers are additional manual-download assets.
+          test -s "dist/kirbysuperstar-${RELEASE_VERSION}-windows-x64.exe"
+          test -s "dist/kirbysuperstar-${RELEASE_VERSION}-linux-x64.AppImage"
+          for platform in macos-arm64 macos-x64; do
+            test -s "dist/kirbysuperstar-${RELEASE_VERSION}-${platform}.dmg"
+            test -s "dist/kirbysuperstar-${RELEASE_VERSION}-${platform}-app.zip"
+          done
+
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          version = os.environ["RELEASE_VERSION"]
+          tag = os.environ["RELEASE_TAG_NAME"]
+          metadata = {
+              "repository": "NVDEMU/KirbySuperStarPC",
+              "channel": "nightly" if tag == "Nightly" else "release",
+              "tag": tag,
+              "version": version,
+              "commit": os.environ["GITHUB_SHA"],
+              "platforms": {
+                  "linux-x64": f"kirbysuperstar-{version}-linux-x64.zip",
+                  "windows-x64": f"kirbysuperstar-{version}-windows-x64.zip",
+                  "macos-arm64": f"kirbysuperstar-{version}-macos-arm64.zip",
+                  "macos-x64": f"kirbysuperstar-{version}-macos-x64.zip",
+              },
+              "native_assets": {
+                  "windows-x64": f"kirbysuperstar-{version}-windows-x64.exe",
+                  "linux-x64": f"kirbysuperstar-{version}-linux-x64.AppImage",
+                  "macos-arm64": f"kirbysuperstar-{version}-macos-arm64.dmg",
+                  "macos-x64": f"kirbysuperstar-{version}-macos-x64.dmg",
+              },
+          }
+          Path("dist/nightly-manifest.json").write_text(
+              json.dumps(metadata, indent=2) + "\\n", encoding="utf-8"
+          )
+          print(f"Generated checksum files and updater metadata for {tag}")
+          PY
+
+          # Overall SHA256SUMS covers all public platform assets and metadata.
+          (cd dist && sha256sum kirbysuperstar-* nightly-manifest.json > SHA256SUMS)
 
       # The tag is created here, after all four builds succeeded, so a failed
       # build never leaves a version number claimed by nothing.
+      - name: Move Nightly tag to the built commit
+        if: github.event_name == 'push' && github.ref_type == 'branch'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f Nightly "${GITHUB_SHA}"
+          git push origin refs/tags/Nightly --force
+
       - name: Tag the commit
+        if: github.event_name == 'workflow_dispatch'
         env:
           TAG: ${{ needs.preflight.outputs.tag }}
         run: |
@@ -336,22 +497,20 @@ jobs:
           TAG: ${{ needs.preflight.outputs.tag }}
         run: |
           set -euo pipefail
-          # From rom_identity.txt, not a copy baked into this workflow.
           ROM_FILE="$(python3 snesrecomp/tools/rom_identity.py rom_identity.txt --get rom_file)"
           ROM_SHA256="$(python3 snesrecomp/tools/rom_identity.py rom_identity.txt --get expected_sha256)"
           {
-            echo "Kirby Super Star ${TAG} — setup packs"
+            echo "Kirby Super Star Recomp ${TAG}"
             echo
-            echo "These packs do not contain the game. Each holds a setup program, the"
-            echo "recompiler and the source; on first run it takes your own copy of"
-            echo "${ROM_FILE} (SHA-256 ${ROM_SHA256}), recompiles it locally, and builds"
-            echo "the playable game. No ROM data is included or downloaded."
+            echo "This release contains setup packs and native launch wrappers, not a prebuilt game."
+            echo "On first launch, choose your own ${ROM_FILE} (SHA-256 ${ROM_SHA256}), then select"
+            echo "Generate & rebuild. No ROM image or ROM-derived generated code is shipped."
             echo
-            if [[ "${{ inputs.embed_toolchain }}" != "false" ]]; then
-              echo "The portable build tools (cmake-clang-v1) are embedded in every pack."
-            else
-              echo "The portable build tools (cmake-clang-v1) are downloaded on first run."
-            fi
+            echo "The Windows EXE is a self-contained setup installer. The macOS DMG contains a"
+            echo "real .app bundle. The Linux AppImage initializes a writable per-user setup folder."
+            echo "Your ROM path cache is created locally and is never included in release assets."
+            echo
+            echo "The portable ZIP is the updater payload, with a per-platform SHA-256 file."
             echo
             echo '### Framework revisions'
             echo
@@ -366,10 +525,14 @@ jobs:
         with:
           tag_name: ${{ needs.preflight.outputs.tag }}
           target_commitish: ${{ github.sha }}
-          name: "Kirby Super Star ${{ needs.preflight.outputs.tag }}"
+          name: ${{ needs.preflight.outputs.tag == 'Nightly' && 'Kirby Super Star Recomp Nightly' || format('Kirby Super Star Recomp {0}', needs.preflight.outputs.tag) }}
+          prerelease: ${{ needs.preflight.outputs.tag == 'Nightly' }}
+          overwrite_files: true
           body_path: notes.md
           files: |
-            dist/${{ env.ZIP_PREFIX }}-*.zip
+            dist/${{ env.ZIP_PREFIX }}-*
             dist/SHA256SUMS
+            dist/SHA256SUMS-*.txt
+            dist/nightly-manifest.json
           fail_on_unmatched_files: true
-          make_latest: true
+          make_latest: ${{ needs.preflight.outputs.tag == 'Nightly' && 'false' || 'true' }}
