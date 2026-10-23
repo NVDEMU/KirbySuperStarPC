@@ -140,6 +140,32 @@ internal static class KirbySuperStarSetupInstaller
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information);
 
+            // If an earlier playable binary survived an update, offer it as an
+            // explicit escape hatch instead of trapping the player in mandatory setup.
+            // The warning is deliberate: the old binary may lack this update's fixes.
+            string existingBuild = Path.Combine(target, "build", ExeName);
+            if (File.Exists(existingBuild))
+            {
+                DialogResult existingChoice = MessageBox.Show(
+                    "An existing playable build was detected.\n\n" +
+                    "Yes: launch that build now and skip regenerating/rebuilding C. " +
+                    "It may not include the latest runtime or graphics fixes.\n\n" +
+                    "No: open Setup & rebuild and use the updated sources. The existing " +
+                    "build will be kept either way.",
+                    "Kirby Super Star Recomp",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Warning);
+                if (existingChoice == DialogResult.Yes)
+                {
+                    Process.Start(new ProcessStartInfo(existingBuild, "--launcher")
+                    {
+                        WorkingDirectory = target,
+                        UseShellExecute = false
+                    });
+                    return;
+                }
+            }
+
             // Keep a small launch breadcrumb and detect a host that exits immediately.
             // Process.Start alone only proves Windows created a process; it does not
             // prove the native launcher survived startup.
