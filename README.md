@@ -16,11 +16,11 @@ _Description from [Wikipedia](https://en.wikipedia.org/wiki/Kirby_Super_Star), C
 The local manual build renders correctly across the tested graphics modes.
 The standard platform ZIPs remain setup/update packs. The native release assets
 (`.dmg` / `.app`, Windows `.exe`, Linux `.AppImage`) become **playable builds**
-when the repository Actions secret `KIRBY_ROM_URL` is configured to a direct
-download URL for the project's exact, verified ROM. The build downloads that
-ROM only inside the temporary CI runner, verifies it, generates the game code,
-compiles each platform natively, and deletes the ROM before packaging. The
-optional `KIRBY_ROM_TOKEN` secret is sent as a Bearer token for private hosts.
+when the repository Actions secret `KIRBY_ROM_URL` contains a MEGA public file
+share link for the project's exact, verified ROM. The build uses MEGA's share
+API (not a normal HTTP fetch), verifies the downloaded ROM, generates the game
+code, compiles each platform natively, and removes the temporary ROM before
+packaging.
 Without `KIRBY_ROM_URL`, the native assets remain the existing setup launchers.
 After adding or changing that Actions secret, push a commit to `main` or rerun
 the **Release** workflow from the Actions tab so Nightly is rebuilt with the new
