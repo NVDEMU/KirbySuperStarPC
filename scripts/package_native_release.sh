@@ -108,7 +108,28 @@ PLIST
     cp -a "$APP" "$DMG_ROOT/"
     ln -s /Applications "$DMG_ROOT/Applications"
     DMG="$DIST/kirbysuperstar-$VERSION-$PLATFORM.dmg"
-    hdiutil create -volname "Kirby Super Star Recomp" -srcfolder "$DMG_ROOT" -ov -format UDZO "$DMG"
+    # hdiutil on GitHub macOS runners can sporadically report
+    # "Resource busy" immediately after a large amount of bundle I/O. Flush
+    # writes first, then retry that transient error with bounded backoff.
+    sync
+    HDIUTIL_LOG="$WORK/hdiutil-create.log"
+    for attempt in 1 2 3 4 5; do
+      if hdiutil create -volname "Kirby Super Star Recomp" -srcfolder "$DMG_ROOT" -ov -format UDZO "$DMG" >"$HDIUTIL_LOG" 2>&1; then
+        cat "$HDIUTIL_LOG"
+        break
+      else
+        hdiutil_status=$?
+        cat "$HDIUTIL_LOG"
+      fi
+      if ! grep -qi "Resource busy" "$HDIUTIL_LOG" || [[ "$attempt" -eq 5 ]]; then
+        exit "$hdiutil_status"
+      fi
+      echo "hdiutil hit a transient Resource busy error (attempt $attempt/5); retrying..."
+      rm -f "$DMG"
+      sleep "$((attempt * 5))"
+      sync
+    done
+    test -s "$DMG"
     hdiutil verify "$DMG"
 
     APP_ZIP="$DIST/kirbysuperstar-$VERSION-$PLATFORM-app.zip"
