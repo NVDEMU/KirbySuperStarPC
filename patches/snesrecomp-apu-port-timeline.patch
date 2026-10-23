@@ -1,7 +1,7 @@
 diff --git a/runner/src/snes/interp_bridge.h b/runner/src/snes/interp_bridge.h
 --- a/runner/src/snes/interp_bridge.h
 +++ b/runner/src/snes/interp_bridge.h
-@@ -129,3 +129,5 @@ static inline bool interp_bridge_use_absolute_apu_timeline(
+@@ -132,3 +132,5 @@ static inline bool interp_bridge_use_absolute_apu_timeline(
 -    bool frame_timeline_active, bool is_sa1, bool mapped_extended_frame) {
 -  return frame_timeline_active && (is_sa1 || mapped_extended_frame);
 +    bool frame_timeline_active, bool is_sa1, bool mapped_extended_frame,
