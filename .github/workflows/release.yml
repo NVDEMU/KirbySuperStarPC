@@ -211,7 +211,7 @@ jobs:
           set -euo pipefail
           python -m py_compile tools/in_app_updater.py tools/test_nightly_updater.py tools/apply_kirby_updater_patch.py
           python tools/test_nightly_updater.py
-          bash -n scripts/package_release.sh
+          bash -n scripts/package_release.sh scripts/package_native_release.sh
 
       - name: Record framework pins
         run: bash snesrecomp/tools/ci/record_pins.sh
@@ -342,9 +342,43 @@ jobs:
               print(f"Verified {archive_path}: no rom.cfg, ROM images, generated code, or per-machine state.")
           PY
 
+      - name: Package Windows setup installer
+        if: matrix.artifact == 'windows-x64'
+        run: bash scripts/package_native_release.sh "${{ matrix.artifact }}" "${RELEASE_VERSION}"
+
+      - name: Package macOS app and DMG
+        if: startsWith(matrix.artifact, 'macos-')
+        run: bash scripts/package_native_release.sh "${{ matrix.artifact }}" "${RELEASE_VERSION}"
+
+      - name: Package Linux AppImage
+        if: matrix.artifact == 'linux-x64'
+        run: bash scripts/package_native_release.sh "${{ matrix.artifact }}" "${RELEASE_VERSION}"
+
+      - name: Verify native outputs
+        env:
+          PLATFORM: ${{ matrix.artifact }}
+        run: |
+          set -euo pipefail
+          case "${PLATFORM}" in
+            windows-x64) test -s "dist/kirbysuperstar-${RELEASE_VERSION}-windows-x64.exe" ;;
+            macos-arm64|macos-x64)
+              test -s "dist/kirbysuperstar-${RELEASE_VERSION}-${PLATFORM}.dmg"
+              test -s "dist/kirbysuperstar-${RELEASE_VERSION}-${PLATFORM}-app.zip"
+              ;;
+            linux-x64) test -s "dist/kirbysuperstar-${RELEASE_VERSION}-linux-x64.AppImage" ;;
+          esac
+
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ZIP_PREFIX }}-${{ matrix.artifact }}
+          path: |
+            dist/${{ env.ZIP_PREFIX }}-*-${{ matrix.artifact }}*.zip
+            dist/${{ env.ZIP_PREFIX }}-*-${{ matrix.artifact }}.exe
+            dist/${{ env.ZIP_PREFIX }}-*-${{ matrix.artifact }}.dmg
+            dist/${{ env.ZIP_PREFIX }}-*-${{ matrix.artifact }}.AppImage
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
           path: dist/${{ env.ZIP_PREFIX }}-*-${{ matrix.artifact }}.zip
           if-no-files-found: error
           retention-days: 7
