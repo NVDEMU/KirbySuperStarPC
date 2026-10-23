@@ -71,6 +71,30 @@ Either way the ROM is checked against the digests above before anything boots
 — a dump that could not have produced this build is refused at the door rather
 than mis-executing ten frames in.
 
+## Package the manual build as a macOS app
+
+When the **manual build on your Mac has already been confirmed to render
+correctly**, package that exact executable directly as a Finder-launchable
+app, DMG, and app ZIP:
+
+```sh
+bash scripts/package_playable_macos_app.sh build
+```
+
+This is a packaging-only step: it does **not** rerun ROM-to-C generation or
+compile C. It checks that `build/KirbySuperStarSNESRecomp` is a playable
+macOS executable, then wraps its built runtime assets in a real `.app`
+and `.dmg`. The app launches the already-built game directly and does not
+show the setup-host's **Generate & rebuild** first-run screen. Files are
+written to `dist/`.
+
+The app stores writable runtime files separately and attempts to carry over
+the ROM path, settings, saves, and installed mods from the previous setup-pack
+data folder. It does not bundle the ROM, local `rom.cfg`, save files, or
+installed mod state. **This manual app is built from one local ROM-derived
+executable**; it is not an artifact the public Nightly workflow can recreate
+without that local manual build. The official Nightly remains a setup pack.
+
 ## Layout
 
 | Path | What lives there |
